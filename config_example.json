@@ -22,8 +22,8 @@
     "order": 4
   },
   "step_detection": {
-    "min_distance_s": 0.3,
-    "prominence": 0.1,
+    "min_distance_s": 0.45,
+    "prominence": 0.2,
     "height": null
   },
   "turn_pause": {

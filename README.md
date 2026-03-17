@@ -101,8 +101,8 @@ Create `config_override.json`:
     "order": 4
   },
   "step_detection": {
-    "min_distance_s": 0.3,
-    "prominence": 0.1
+    "min_distance_s": 0.45,
+    "prominence": 0.2
   }
 }
 ```
@@ -132,4 +132,3 @@ python3 extract_features.py \
 - duplicate `patient_id/date` rows
 - rows where all features are `NaN`
 - high missingness in key duration features
-

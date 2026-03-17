@@ -27,8 +27,8 @@ class FilterConfig:
 
 @dataclass
 class StepDetectionConfig:
-    min_distance_s: float = 0.30
-    prominence: float = 0.10
+    min_distance_s: float = 0.45
+    prominence: float = 0.20
     height: float = None
 
 
