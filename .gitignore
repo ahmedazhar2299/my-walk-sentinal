@@ -3,3 +3,5 @@
 /Ahmed
 *.csv
 /Stroke
+__pycache__
+.DS_Store
