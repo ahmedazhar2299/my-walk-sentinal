@@ -1,0 +1,37 @@
+{
+  "dataset_root": "Data",
+  "output_csv": "features_dataset.csv",
+  "walk_distance_m": 10.0,
+  "prefer_useracc_for_motion": true,
+  "min_rows_per_activity": 5,
+  "column_candidates": {
+    "timestamp": ["Timestamp", "timestamp", "time", "Time"],
+    "accel_x": ["Accel_X", "accel_x", "acc_x"],
+    "accel_y": ["Accel_Y", "accel_y", "acc_y"],
+    "accel_z": ["Accel_Z", "accel_z", "acc_z"],
+    "useracc_x": ["UserAccel_X", "useracc_x", "linacc_x", "linearacc_x"],
+    "useracc_y": ["UserAccel_Y", "useracc_y", "linacc_y", "linearacc_y"],
+    "useracc_z": ["UserAccel_Z", "useracc_z", "linacc_z", "linearacc_z"],
+    "gyro_x": ["Gyro_X", "gyro_x", "gyr_x"],
+    "gyro_y": ["Gyro_Y", "gyro_y", "gyr_y"],
+    "gyro_z": ["Gyro_Z", "gyro_z", "gyr_z"]
+  },
+  "filtering": {
+    "enabled": true,
+    "cutoff_hz": 5.0,
+    "order": 4
+  },
+  "step_detection": {
+    "min_distance_s": 0.3,
+    "prominence": 0.1,
+    "height": null
+  },
+  "turn_pause": {
+    "velocity_threshold": 0.2,
+    "min_pause_duration_s": 0.2
+  },
+  "transition_peaks": {
+    "min_distance_s": 0.15,
+    "prominence": 0.1
+  }
+}
