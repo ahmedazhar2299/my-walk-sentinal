@@ -48,6 +48,7 @@ Required exact filenames per patient/date folder:
 - `step_time_std = std(diff(step_times))`
 - `step_time_cv = step_time_std / mean_step_time`
 - `step_regularity`, `stride_regularity`: normalized autocorrelation at step/stride lags.
+- `walk_dominant_frequency`: FFT peak frequency of the walking acceleration signal (excluding 0 Hz).
 - Signal stats from acceleration/user acceleration magnitude and gyroscope magnitude:
   mean, std, RMS, dominant frequency, spectral entropy, jerk mean/std.
 

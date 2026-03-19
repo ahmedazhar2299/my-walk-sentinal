@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy.signal import butter, filtfilt, find_peaks, welch
+from scipy.stats import entropy as scipy_entropy
 
 from .config import PipelineConfig
 
@@ -175,6 +176,7 @@ def rms(values):
 
 
 def dominant_frequency(values, fs_hz):
+    """Estimate dominant frequency from FFT power peak (excluding 0 Hz)."""
     values = np.asarray(values, dtype=float)
     if len(values) < 8 or not np.isfinite(fs_hz) or fs_hz <= 0:
         return np.nan
@@ -183,11 +185,17 @@ def dominant_frequency(values, fs_hz):
     if len(centered) < 8:
         return np.nan
 
-    freqs, psd = welch(centered, fs=fs_hz, nperseg=min(256, len(centered)))
-    valid = np.isfinite(freqs) & np.isfinite(psd) & (freqs > 0)
+    # FFT-based dominant frequency (ignoring DC at 0 Hz).
+    n = len(centered)
+    window = np.hanning(n)
+    spectrum = np.fft.rfft(centered * window)
+    freqs = np.fft.rfftfreq(n, d=1.0 / fs_hz)
+    power = np.abs(spectrum) ** 2
+
+    valid = np.isfinite(freqs) & np.isfinite(power) & (freqs > 0)
     if valid.sum() == 0:
         return np.nan
-    idx = np.argmax(psd[valid])
+    idx = np.argmax(power[valid])
     return float(freqs[valid][idx])
 
 
@@ -209,8 +217,9 @@ def spectral_entropy(values, fs_hz):
         return np.nan
 
     prob = psd / total
-    entropy = -np.sum(prob * np.log2(prob + 1e-12))
-    return float(entropy / np.log2(len(prob)))
+    # Normalized Shannon entropy in [0, 1] using SciPy.
+    ent = scipy_entropy(prob, base=2)
+    return float(ent / np.log2(len(prob)))
 
 
 def detect_peaks(signal, fs_hz, min_distance_s, prominence, height=None):
