@@ -1,7 +1,7 @@
 /env
-/SRS
-/Ahmed
+/Activity_Data
 *.csv
 /Stroke
 __pycache__
 .DS_Store
+/Data
