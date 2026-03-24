@@ -5,3 +5,6 @@
 /Data
 .DS_Store
 __pycache__
+.ipynb_checkpoints/
+anaconda_projects/
+project_filebrowser.db
