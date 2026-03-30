@@ -8,7 +8,6 @@ from imu_features import (
     load_config,
     run_validation_checks,
 )
-from imu_features.utils import plot_debug_signal
 
 
 def parse_args():
@@ -35,27 +34,6 @@ def parse_args():
         action="store_true",
         help="Skip post-extraction validation checks.",
     )
-    parser.add_argument(
-        "--debug-file",
-        default=None,
-        help="Optional: run a debug plot on one CSV file instead of full extraction.",
-    )
-    parser.add_argument(
-        "--debug-signal",
-        default="motion_acc",
-        help="Signal for debug plotting (default: motion_acc).",
-    )
-    parser.add_argument(
-        "--debug-peak-mode",
-        choices=["steps", "transition"],
-        default=None,
-        help="Optional peak overlay mode for debug plot.",
-    )
-    parser.add_argument(
-        "--debug-plot-out",
-        default=None,
-        help="Optional path to save debug figure (PNG). If omitted, shows plot interactively.",
-    )
     return parser.parse_args()
 
 
@@ -68,17 +46,6 @@ def main():
         config.filtering.enabled = False
     if args.walk_distance_m is not None:
         config.walk_distance_m = args.walk_distance_m
-
-    if args.debug_file:
-        peaks = plot_debug_signal(
-            csv_path=args.debug_file,
-            config=config,
-            signal_name=args.debug_signal,
-            peak_mode=args.debug_peak_mode,
-            output_path=args.debug_plot_out,
-        )
-        print(f"[INFO] Debug plot complete. Detected peaks: {len(peaks)}")
-        return
 
     df = extract_dataset_features(
         dataset_root=Path(config.dataset_root),

@@ -6,7 +6,7 @@ This project builds one feature row per `patient/date` from activity-specific IM
 
 - `extract_features.py`: CLI entry point for full extraction and validation checks.
 - `imu_features/config.py`: Config dataclasses and optional JSON override loader.
-- `imu_features/utils.py`: Shared preprocessing, filtering, peak detection, spectral metrics, file resolution, debug plotting.
+- `imu_features/utils.py`: Shared preprocessing, filtering, peak detection, spectral metrics, and file resolution.
 - `imu_features/walk_features.py`: Walk/gait feature extraction.
 - `imu_features/turn_features.py`: Left/right turn feature extraction.
 - `imu_features/transition_features.py`: Sit-to-stand and stand-to-sit feature extraction.
@@ -111,19 +111,7 @@ Create `config_override.json`:
 Run:
 
 ```bash
-python3 extract_features.py --config-json config_override.json
-```
-
-## Debug Plotting
-
-Plot one file and overlay step peaks:
-
-```bash
-python3 extract_features.py \
-  --debug-file "Data/patient_103/2026-03-08/walk.csv" \
-  --debug-signal motion_acc \
-  --debug-peak-mode steps \
-  --debug-plot-out debug_walk.png
+python3 extract_features.py --config-json config_example.json
 ```
 
 ## Validation Checks

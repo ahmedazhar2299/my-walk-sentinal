@@ -8,3 +8,4 @@ __pycache__
 .ipynb_checkpoints/
 anaconda_projects/
 project_filebrowser.db
+.bulk_imu_last_dir
