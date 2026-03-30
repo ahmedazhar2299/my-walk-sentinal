@@ -275,6 +275,156 @@ def count_pauses(angular_velocity, time_s, threshold, min_duration_s):
     return pause_count, total_pause_time
 
 
+def mask_close_gaps(mask, max_gap_samples):
+    mask = np.asarray(mask, dtype=bool)
+    if len(mask) == 0 or max_gap_samples <= 0:
+        return mask
+
+    out = mask.copy()
+    i = 0
+    n = len(out)
+    while i < n:
+        if out[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and not out[j]:
+            j += 1
+        gap_len = j - i
+        left_on = i > 0 and out[i - 1]
+        right_on = j < n and out[j]
+        if left_on and right_on and gap_len <= max_gap_samples:
+            out[i:j] = True
+        i = j
+    return out
+
+
+def largest_true_segment(mask):
+    mask = np.asarray(mask, dtype=bool)
+    best = None
+    i = 0
+    n = len(mask)
+    while i < n:
+        if not mask[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and mask[j]:
+            j += 1
+        if best is None or (j - i) > (best[1] - best[0]):
+            best = (i, j - 1)
+        i = j
+    return best
+
+
+def detect_active_window(signal, time_s, min_duration_s=0.8, threshold=None):
+    signal = np.asarray(signal, dtype=float)
+    time_s = np.asarray(time_s, dtype=float)
+    if len(signal) == 0 or len(time_s) == 0:
+        return np.nan, np.nan, np.nan, np.zeros(0, dtype=bool), np.nan
+
+    fs_hz = 1.0 / estimate_sampling_interval_s(time_s) if len(time_s) > 2 else np.nan
+    baseline = np.nanmedian(signal)
+    motion = np.abs(signal - baseline)
+
+    if threshold is None:
+        if np.isfinite(motion).any():
+            q70 = np.nanpercentile(motion, 70)
+            q90 = np.nanpercentile(motion, 90)
+            threshold = q70 + 0.15 * (q90 - q70) if np.isfinite(q70) and np.isfinite(q90) else np.nan
+        else:
+            threshold = np.nan
+
+    if not np.isfinite(threshold):
+        return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), np.nan
+
+    active = np.isfinite(motion) & (motion >= threshold)
+    if np.isfinite(fs_hz) and fs_hz > 0:
+        active = mask_close_gaps(active, max_gap_samples=max(1, int(0.25 * fs_hz)))
+
+    seg = largest_true_segment(active)
+    if seg is None:
+        return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), threshold
+
+    i0, i1 = seg
+    start_t = float(time_s[i0])
+    end_t = float(time_s[i1])
+    duration = float(end_t - start_t)
+    if duration < min_duration_s:
+        return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), threshold
+
+    mask = np.zeros(len(time_s), dtype=bool)
+    mask[i0 : i1 + 1] = True
+    return start_t, end_t, duration, mask, threshold
+
+
+def detect_walk_window_from_peaks(acc_signal, time_s, peaks):
+    acc_signal = np.asarray(acc_signal, dtype=float)
+    time_s = np.asarray(time_s, dtype=float)
+    peaks = np.asarray(peaks, dtype=int)
+    if len(time_s) == 0:
+        return np.nan, np.nan, np.nan, np.zeros(0, dtype=bool)
+
+    if len(peaks) >= 2:
+        step_dt = np.diff(time_s[peaks])
+        pad = float(np.nanmedian(step_dt) * 0.20) if len(step_dt) else 0.12
+        pad = pad if np.isfinite(pad) and pad > 0 else 0.12
+        start_t = max(float(time_s[0]), float(time_s[peaks[0]] - pad))
+        end_t = min(float(time_s[-1]), float(time_s[peaks[-1]] + pad))
+        if end_t > start_t:
+            mask = (time_s >= start_t) & (time_s <= end_t)
+            return start_t, end_t, float(end_t - start_t), mask
+
+    start_t, end_t, duration, mask, _ = detect_active_window(acc_signal, time_s, min_duration_s=1.0)
+    return start_t, end_t, duration, mask
+
+
+def detect_turn_window(angular_signal_abs, time_s, threshold):
+    angular_signal_abs = np.asarray(angular_signal_abs, dtype=float)
+    time_s = np.asarray(time_s, dtype=float)
+    if len(time_s) == 0:
+        return np.nan, np.nan, np.nan, np.zeros(0, dtype=bool)
+
+    fs_hz = 1.0 / estimate_sampling_interval_s(time_s) if len(time_s) > 2 else np.nan
+    active = np.isfinite(angular_signal_abs) & (angular_signal_abs >= threshold)
+    if np.isfinite(fs_hz) and fs_hz > 0:
+        active = mask_close_gaps(active, max_gap_samples=max(1, int(0.60 * fs_hz)))
+
+    min_run = max(1, int(0.25 * fs_hz)) if np.isfinite(fs_hz) and fs_hz > 0 else 1
+    cleaned = np.zeros(len(active), dtype=bool)
+    i = 0
+    while i < len(active):
+        if not active[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(active) and active[j]:
+            j += 1
+        if (j - i) >= min_run:
+            cleaned[i:j] = True
+        i = j
+    active = cleaned
+
+    if not np.any(active):
+        start_t, end_t, duration, mask, _ = detect_active_window(
+            angular_signal_abs, time_s, min_duration_s=0.8
+        )
+        return start_t, end_t, duration, mask
+
+    idx = np.where(active)[0]
+    i0 = int(idx[0])
+    i1 = int(idx[-1])
+    pad = int(0.15 * fs_hz) if np.isfinite(fs_hz) and fs_hz > 0 else 1
+    i0 = max(0, i0 - pad)
+    i1 = min(len(time_s) - 1, i1 + pad)
+
+    start_t = float(time_s[i0])
+    end_t = float(time_s[i1])
+    mask = np.zeros(len(time_s), dtype=bool)
+    mask[i0 : i1 + 1] = True
+    return start_t, end_t, float(end_t - start_t), mask
+
+
 def select_motion_acc_signal(df, prefer_useracc=True):
     if prefer_useracc and "useracc_mag" in df and not np.all(np.isnan(df["useracc_mag"].to_numpy())):
         return df["useracc_mag"].to_numpy(dtype=float), "useracc_mag"
@@ -368,4 +518,3 @@ def resolve_activity_files(date_dir):
         expected_path = date_dir / f"{activity}.csv"
         resolved[activity] = expected_path if expected_path.is_file() else None
     return resolved
-

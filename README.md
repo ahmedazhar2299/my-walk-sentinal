@@ -40,7 +40,7 @@ Required exact filenames per patient/date folder:
 
 ### Walk
 
-- `walk_duration = t_end - t_start`
+- `walk_duration = detected_walk_end - detected_walk_start` (movement window inside file)
 - `step_count = number_of_detected_peaks(acc_signal)`
 - `cadence = 60 * step_count / walk_duration`
 - `walking_speed = walk_distance_m / walk_duration` (default distance = 10m)
@@ -54,7 +54,7 @@ Required exact filenames per patient/date folder:
 
 ### Left/Right Turn
 
-- `*_duration = t_end - t_start`
+- `*_duration = detected_turn_end - detected_turn_start` (turning window inside file)
 - `*_mean_angular_velocity = mean(abs(turn_angular_signal))`
 - `*_peak_angular_velocity = max(abs(turn_angular_signal))`
 - `*_ang_vel_std = std(turn_angular_signal)`
@@ -64,7 +64,7 @@ Required exact filenames per patient/date folder:
 
 ### Sit-to-Stand / Stand-to-Sit
 
-- `*_duration = t_end - t_start`
+- `*_duration = detected_transition_end - detected_transition_start` (active transition window)
 - `*_time_to_peak_acc = time_of_peak_acc - t_start`
 - `*_peak_acc = max(acc_signal)`
 - `*_peak_gyro = max(gyro_mag)`

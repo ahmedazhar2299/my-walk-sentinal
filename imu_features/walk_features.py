@@ -6,6 +6,7 @@ from .utils import (
     SignalMeta,
     build_nan_feature_dict,
     detect_peaks,
+    detect_walk_window_from_peaks,
     dominant_frequency,
     rms,
     select_motion_acc_signal,
@@ -71,7 +72,11 @@ def extract_walk_features(df, meta, config):
         height=config.step_detection.height,
     )
 
-    duration = float(meta.duration_s) if np.isfinite(meta.duration_s) else np.nan
+    start_t, end_t, duration, walk_mask = detect_walk_window_from_peaks(
+        acc_signal=acc_signal, time_s=time_s, peaks=peaks
+    )
+    if np.isfinite(start_t) and np.isfinite(end_t) and np.any(walk_mask):
+        peaks = peaks[(time_s[peaks] >= start_t) & (time_s[peaks] <= end_t)]
     step_count = float(len(peaks))
     out["walk_duration"] = duration
     out["step_count"] = step_count
@@ -89,7 +94,11 @@ def extract_walk_features(df, meta, config):
         out["step_time_std"] = step_time_std
         out["step_time_cv"] = step_time_std / step_time_mean if step_time_mean > 0 else np.nan
 
-    acf = _autocorrelation(acc_signal)
+    if np.any(walk_mask):
+        acc_for_reg = acc_signal[walk_mask]
+    else:
+        acc_for_reg = acc_signal
+    acf = _autocorrelation(acc_for_reg)
     lag_samples = np.nan
     if np.isfinite(step_time_mean) and step_time_mean > 0 and np.isfinite(meta.fs_hz):
         lag_samples = int(round(step_time_mean * meta.fs_hz))
@@ -103,15 +112,24 @@ def extract_walk_features(df, meta, config):
         out["step_regularity"] = _regularity_from_acf(acf, lag_samples)
         out["stride_regularity"] = _regularity_from_acf(acf, 2 * lag_samples)
 
-    out["walk_acc_mag_mean"] = float(np.nanmean(acc_signal))
-    out["walk_acc_mag_std"] = float(np.nanstd(acc_signal))
-    out["walk_acc_mag_rms"] = rms(acc_signal)
-    out["walk_gyro_mag_std"] = float(np.nanstd(df["gyro_mag"].to_numpy(dtype=float)))
-    out["walk_dominant_frequency"] = dominant_frequency(acc_signal, meta.fs_hz)
-    out["walk_spectral_entropy"] = spectral_entropy(acc_signal, meta.fs_hz)
+    if np.any(walk_mask):
+        acc_stats = acc_signal[walk_mask]
+        gyro_stats = df["gyro_mag"].to_numpy(dtype=float)[walk_mask]
+    else:
+        acc_stats = acc_signal
+        gyro_stats = df["gyro_mag"].to_numpy(dtype=float)
+
+    out["walk_acc_mag_mean"] = float(np.nanmean(acc_stats))
+    out["walk_acc_mag_std"] = float(np.nanstd(acc_stats))
+    out["walk_acc_mag_rms"] = rms(acc_stats)
+    out["walk_gyro_mag_std"] = float(np.nanstd(gyro_stats))
+    out["walk_dominant_frequency"] = dominant_frequency(acc_stats, meta.fs_hz)
+    out["walk_spectral_entropy"] = spectral_entropy(acc_stats, meta.fs_hz)
 
     jerk_col = "useracc_jerk" if acc_source == "useracc_mag" else "acc_jerk"
     jerk = df[jerk_col].to_numpy(dtype=float)
+    if np.any(walk_mask):
+        jerk = jerk[walk_mask]
     out["walk_jerk_mean"] = float(np.nanmean(np.abs(jerk)))
     out["walk_jerk_std"] = float(np.nanstd(jerk))
 
