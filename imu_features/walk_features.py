@@ -4,6 +4,7 @@ import pandas as pd
 from .config import PipelineConfig
 from .utils import (
     SignalMeta,
+    adaptive_amplitude_threshold,
     build_nan_feature_dict,
     detect_peaks,
     detect_walk_window_from_peaks,
@@ -64,12 +65,19 @@ def extract_walk_features(df, meta, config):
     time_s = df["time_s"].to_numpy(dtype=float)
     acc_signal, acc_source = select_motion_acc_signal(df, config.prefer_useracc_for_motion)
 
+    step_threshold, _, _ = adaptive_amplitude_threshold(
+        signal=acc_signal,
+        fs_hz=meta.fs_hz,
+        config=config.adaptive_thresholds,
+        k_value=config.adaptive_thresholds.step_threshold_k,
+        min_value=config.adaptive_thresholds.step_threshold_min,
+    )
+
     peaks = detect_peaks(
         signal=acc_signal,
         fs_hz=meta.fs_hz,
         min_distance_s=config.step_detection.min_distance_s,
-        prominence=config.step_detection.prominence,
-        height=config.step_detection.height,
+        height=step_threshold,
     )
 
     start_t, end_t, duration, walk_mask = detect_walk_window_from_peaks(

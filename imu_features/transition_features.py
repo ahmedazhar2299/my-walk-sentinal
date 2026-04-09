@@ -4,6 +4,7 @@ import pandas as pd
 from .config import PipelineConfig
 from .utils import (
     SignalMeta,
+    adaptive_amplitude_threshold,
     build_nan_feature_dict,
     detect_active_window,
     detect_peaks,
@@ -66,12 +67,19 @@ def extract_transition_features(df, meta, config, prefix):
     out[f"{prefix}_jerk_mean"] = float(np.nanmean(np.abs(acc_jerk)))
     out[f"{prefix}_jerk_std"] = float(np.nanstd(acc_jerk))
 
+    transition_threshold, _, _ = adaptive_amplitude_threshold(
+        signal=acc_for_stats,
+        fs_hz=meta.fs_hz,
+        config=config.adaptive_thresholds,
+        k_value=config.adaptive_thresholds.transition_threshold_k,
+        min_value=config.adaptive_thresholds.transition_threshold_min,
+    )
+
     peaks = detect_peaks(
         signal=acc_for_stats,
         fs_hz=meta.fs_hz,
         min_distance_s=config.transition_peaks.min_distance_s,
-        prominence=config.transition_peaks.prominence,
-        height=None,
+        height=transition_threshold,
     )
     out[f"{prefix}_peak_count"] = float(len(peaks))
     out[f"{prefix}_entropy"] = spectral_entropy(acc_for_stats, meta.fs_hz)

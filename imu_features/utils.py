@@ -222,7 +222,7 @@ def spectral_entropy(values, fs_hz):
     return float(ent / np.log2(len(prob)))
 
 
-def detect_peaks(signal, fs_hz, min_distance_s, prominence, height=None):
+def detect_peaks(signal, fs_hz, min_distance_s, height=None):
     values = np.asarray(signal, dtype=float)
     if len(values) < 3:
         return np.array([], dtype=int)
@@ -234,13 +234,63 @@ def detect_peaks(signal, fs_hz, min_distance_s, prominence, height=None):
     kwargs = {}
     if np.isfinite(fs_hz) and fs_hz > 0 and np.isfinite(min_distance_s):
         kwargs["distance"] = max(1, int(round(min_distance_s * fs_hz)))
-    if prominence is not None:
-        kwargs["prominence"] = prominence
     if height is not None:
         kwargs["height"] = height
 
     peaks, _ = find_peaks(filled, **kwargs)
     return peaks.astype(int)
+
+
+def clamp_threshold(value, min_value):
+    if not np.isfinite(value):
+        return min_value
+    return float(max(value, min_value))
+
+
+def quiet_window_stats(signal, fs_hz, window_sec=1.0, min_samples=10):
+    values = np.asarray(signal, dtype=float)
+    finite = np.isfinite(values)
+    if finite.sum() < max(3, min_samples):
+        return np.nan, np.nan
+
+    x_axis = np.arange(len(values), dtype=float)
+    filled = _fill_nans_linear(values, x_axis)
+    if np.isnan(filled).all():
+        return np.nan, np.nan
+
+    if np.isfinite(fs_hz) and fs_hz > 0 and np.isfinite(window_sec) and window_sec > 0:
+        window_n = int(round(window_sec * fs_hz))
+    else:
+        window_n = min_samples
+    window_n = max(min_samples, window_n)
+    window_n = min(window_n, len(filled))
+    if window_n < 3:
+        return np.nan, np.nan
+
+    best_std = np.inf
+    best_slice = None
+    for start in range(0, len(filled) - window_n + 1):
+        window = filled[start : start + window_n]
+        window_std = float(np.nanstd(window))
+        if np.isfinite(window_std) and window_std < best_std:
+            best_std = window_std
+            best_slice = window
+
+    if best_slice is None:
+        return np.nan, np.nan
+    return float(np.nanmean(best_slice)), float(np.nanstd(best_slice))
+
+
+def adaptive_amplitude_threshold(signal, fs_hz, config, k_value, min_value):
+    baseline_mean, sigma = quiet_window_stats(
+        signal=signal,
+        fs_hz=fs_hz,
+        window_sec=config.quiet_window_sec,
+        min_samples=config.min_window_samples,
+    )
+    if not np.isfinite(baseline_mean) or not np.isfinite(sigma) or sigma <= 0:
+        return min_value, baseline_mean, sigma
+    return clamp_threshold(baseline_mean + k_value * sigma, min_value), baseline_mean, sigma
 
 
 def count_pauses(angular_velocity, time_s, threshold, min_duration_s):
@@ -365,12 +415,20 @@ def detect_walk_window_from_peaks(acc_signal, time_s, peaks):
     if len(time_s) == 0:
         return np.nan, np.nan, np.nan, np.zeros(0, dtype=bool)
 
+    motion_start, motion_end, _, _, _ = detect_active_window(acc_signal, time_s, min_duration_s=1.0)
+
     if len(peaks) >= 2:
         step_dt = np.diff(time_s[peaks])
         pad = float(np.nanmedian(step_dt) * 0.20) if len(step_dt) else 0.12
         pad = pad if np.isfinite(pad) and pad > 0 else 0.12
         start_t = max(float(time_s[0]), float(time_s[peaks[0]] - pad))
         end_t = min(float(time_s[-1]), float(time_s[peaks[-1]] + pad))
+        if np.isfinite(motion_start):
+            start_t = min(start_t, float(motion_start))
+        if np.isfinite(motion_end):
+            end_t = max(end_t, float(motion_end))
+        start_t = max(float(time_s[0]), start_t)
+        end_t = min(float(time_s[-1]), end_t)
         if end_t > start_t:
             mask = (time_s >= start_t) & (time_s <= end_t)
             return start_t, end_t, float(end_t - start_t), mask

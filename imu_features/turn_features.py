@@ -4,6 +4,7 @@ import pandas as pd
 from .config import PipelineConfig
 from .utils import (
     SignalMeta,
+    adaptive_amplitude_threshold,
     build_nan_feature_dict,
     count_pauses,
     detect_turn_window,
@@ -38,10 +39,26 @@ def extract_turn_features(df, meta, config, prefix):
     time_s = df["time_s"].to_numpy(dtype=float)
     angular_signal, _ = select_turn_angular_signal(df, config, meta.fs_hz)
     angular_abs = np.abs(angular_signal)
+
+    turn_threshold, _, _ = adaptive_amplitude_threshold(
+        signal=angular_abs,
+        fs_hz=meta.fs_hz,
+        config=config.adaptive_thresholds,
+        k_value=config.adaptive_thresholds.turn_threshold_k,
+        min_value=config.adaptive_thresholds.turn_threshold_min,
+    )
+    pause_threshold, _, _ = adaptive_amplitude_threshold(
+        signal=angular_abs,
+        fs_hz=meta.fs_hz,
+        config=config.adaptive_thresholds,
+        k_value=config.adaptive_thresholds.pause_threshold_k,
+        min_value=config.adaptive_thresholds.pause_threshold_min,
+    )
+
     start_t, end_t, duration, turn_mask = detect_turn_window(
         angular_signal_abs=angular_abs,
         time_s=time_s,
-        threshold=config.turn_pause.velocity_threshold,
+        threshold=turn_threshold,
     )
     if np.any(turn_mask):
         ang_for_stats = angular_signal[turn_mask]
@@ -60,7 +77,7 @@ def extract_turn_features(df, meta, config, prefix):
     pause_count, pause_time = count_pauses(
         angular_velocity=ang_for_stats,
         time_s=t_for_stats,
-        threshold=config.turn_pause.velocity_threshold,
+        threshold=pause_threshold,
         min_duration_s=config.turn_pause.min_pause_duration_s,
     )
     out[f"{prefix}_pause_count"] = pause_count

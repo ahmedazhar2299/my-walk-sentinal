@@ -28,20 +28,30 @@ class FilterConfig:
 @dataclass
 class StepDetectionConfig:
     min_distance_s: float = 0.45
-    prominence: float = 0.20
-    height: float = None
 
 
 @dataclass
 class TurnPauseConfig:
-    velocity_threshold: float = 0.20
     min_pause_duration_s: float = 0.20
 
 
 @dataclass
 class TransitionPeakConfig:
     min_distance_s: float = 0.15
-    prominence: float = 0.10
+
+
+@dataclass
+class AdaptiveThresholdConfig:
+    quiet_window_sec: float = 1.0
+    min_window_samples: int = 10
+    step_threshold_k: float = 4.0
+    turn_threshold_k: float = 3.0
+    pause_threshold_k: float = 1.5
+    transition_threshold_k: float = 2.0
+    step_threshold_min: float = 0.05
+    turn_threshold_min: float = 0.05
+    pause_threshold_min: float = 0.02
+    transition_threshold_min: float = 0.03
 
 
 @dataclass
@@ -56,6 +66,7 @@ class PipelineConfig:
     step_detection: StepDetectionConfig = field(default_factory=StepDetectionConfig)
     turn_pause: TurnPauseConfig = field(default_factory=TurnPauseConfig)
     transition_peaks: TransitionPeakConfig = field(default_factory=TransitionPeakConfig)
+    adaptive_thresholds: AdaptiveThresholdConfig = field(default_factory=AdaptiveThresholdConfig)
 
     def to_dict(self):
         return asdict(self)

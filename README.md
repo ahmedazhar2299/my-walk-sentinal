@@ -102,11 +102,29 @@ Create `config_override.json`:
     "order": 4
   },
   "step_detection": {
-    "min_distance_s": 0.45,
-    "prominence": 0.2
+    "min_distance_s": 0.45
+  },
+  "turn_pause": {
+    "min_pause_duration_s": 0.2
+  },
+  "transition_peaks": {
+    "min_distance_s": 0.15
+  },
+  "adaptive_thresholds": {
+    "quiet_window_sec": 1.0,
+    "step_threshold_k": 4.0,
+    "turn_threshold_k": 3.0,
+    "pause_threshold_k": 1.5,
+    "transition_threshold_k": 2.0
   }
 }
 ```
+
+The pipeline estimates a quiet baseline window in each file and uses:
+
+- threshold: `mean_quiet + k * std_quiet`
+
+This single adaptive threshold is applied to walk step peaks, turn detection, pause detection, and transition peak counting.
 
 Run:
 
