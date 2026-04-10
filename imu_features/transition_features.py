@@ -26,6 +26,8 @@ TRANSITION_SUFFIXES = [
     "entropy",
 ]
 
+DEFAULT_TRANSITION_MIN_DISTANCE_S = 0.15
+
 
 def transition_feature_names(prefix):
     return [f"{prefix}_{suffix}" for suffix in TRANSITION_SUFFIXES]
@@ -78,7 +80,7 @@ def extract_transition_features(df, meta, config, prefix):
     peaks = detect_peaks(
         signal=acc_for_stats,
         fs_hz=meta.fs_hz,
-        min_distance_s=config.transition_peaks.min_distance_s,
+        min_distance_s=DEFAULT_TRANSITION_MIN_DISTANCE_S,
         height=transition_threshold,
     )
     out[f"{prefix}_peak_count"] = float(len(peaks))

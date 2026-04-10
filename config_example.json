@@ -27,9 +27,6 @@
   "turn_pause": {
     "adaptive_beta": 0.5
   },
-  "transition_peaks": {
-    "min_distance_s": 0.15
-  },
   "adaptive_thresholds": {
     "quiet_window_sec": 1.0,
     "min_window_samples": 10,

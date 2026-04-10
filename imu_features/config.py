@@ -36,11 +36,6 @@ class TurnPauseConfig:
 
 
 @dataclass
-class TransitionPeakConfig:
-    min_distance_s: float = 0.15
-
-
-@dataclass
 class AdaptiveThresholdConfig:
     quiet_window_sec: float = 1.0
     min_window_samples: int = 10
@@ -65,7 +60,6 @@ class PipelineConfig:
     filtering: FilterConfig = field(default_factory=FilterConfig)
     step_detection: StepDetectionConfig = field(default_factory=StepDetectionConfig)
     turn_pause: TurnPauseConfig = field(default_factory=TurnPauseConfig)
-    transition_peaks: TransitionPeakConfig = field(default_factory=TransitionPeakConfig)
     adaptive_thresholds: AdaptiveThresholdConfig = field(default_factory=AdaptiveThresholdConfig)
 
     def to_dict(self):
