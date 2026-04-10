@@ -22,10 +22,10 @@
     "order": 4
   },
   "step_detection": {
-    "min_distance_s": 0.35
+    "adaptive_alpha": 0.5
   },
   "turn_pause": {
-    "min_pause_duration_s": 0.2
+    "adaptive_beta": 0.5
   },
   "transition_peaks": {
     "min_distance_s": 0.15

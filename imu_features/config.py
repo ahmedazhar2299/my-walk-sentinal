@@ -27,12 +27,12 @@ class FilterConfig:
 
 @dataclass
 class StepDetectionConfig:
-    min_distance_s: float = 0.45
+    adaptive_alpha: float = 0.5
 
 
 @dataclass
 class TurnPauseConfig:
-    min_pause_duration_s: float = 0.20
+    adaptive_beta: float = 0.5
 
 
 @dataclass

@@ -102,10 +102,10 @@ Create `config_override.json`:
     "order": 4
   },
   "step_detection": {
-    "min_distance_s": 0.45
+    "adaptive_alpha": 0.5
   },
   "turn_pause": {
-    "min_pause_duration_s": 0.2
+    "adaptive_beta": 0.5
   },
   "transition_peaks": {
     "min_distance_s": 0.15
@@ -125,6 +125,11 @@ The pipeline estimates a quiet baseline window in each file and uses:
 - threshold: `mean_quiet + k * std_quiet`
 
 This single adaptive threshold is applied to walk step peaks, turn detection, pause detection, and transition peak counting.
+
+Timing constraints are also adapted in two passes:
+
+- `step_min_distance_s = alpha * median(step_intervals_from_rough_peaks)`
+- `pause_min_duration_s = beta * median(candidate_pause_durations)`
 
 Run:
 

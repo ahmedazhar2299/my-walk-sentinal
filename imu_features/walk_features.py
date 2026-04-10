@@ -5,6 +5,7 @@ from .config import PipelineConfig
 from .utils import (
     SignalMeta,
     adaptive_amplitude_threshold,
+    adaptive_step_min_distance,
     build_nan_feature_dict,
     detect_peaks,
     detect_walk_window_from_peaks,
@@ -73,10 +74,22 @@ def extract_walk_features(df, meta, config):
         min_value=config.adaptive_thresholds.step_threshold_min,
     )
 
+    rough_peaks = detect_peaks(
+        signal=acc_signal,
+        fs_hz=meta.fs_hz,
+        min_distance_s=np.nan,
+        height=step_threshold,
+    )
+    step_min_distance_s = adaptive_step_min_distance(
+        time_s=time_s,
+        candidate_peaks=rough_peaks,
+        alpha=config.step_detection.adaptive_alpha,
+    )
+
     peaks = detect_peaks(
         signal=acc_signal,
         fs_hz=meta.fs_hz,
-        min_distance_s=config.step_detection.min_distance_s,
+        min_distance_s=step_min_distance_s,
         height=step_threshold,
     )
 

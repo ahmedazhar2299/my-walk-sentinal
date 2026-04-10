@@ -293,6 +293,56 @@ def adaptive_amplitude_threshold(signal, fs_hz, config, k_value, min_value):
     return clamp_threshold(baseline_mean + k_value * sigma, min_value), baseline_mean, sigma
 
 
+def adaptive_step_min_distance(time_s, candidate_peaks, alpha):
+    time_s = np.asarray(time_s, dtype=float)
+    candidate_peaks = np.asarray(candidate_peaks, dtype=int)
+    if len(candidate_peaks) < 2:
+        return np.nan
+
+    dt = np.diff(time_s[candidate_peaks])
+    dt = dt[np.isfinite(dt) & (dt > 0)]
+    if len(dt) == 0:
+        return np.nan
+
+    return float(alpha * np.nanmedian(dt))
+
+
+def pause_segment_durations(angular_velocity, time_s, threshold):
+    values = np.asarray(angular_velocity, dtype=float)
+    time_s = np.asarray(time_s, dtype=float)
+    if len(values) != len(time_s) or len(values) < 2:
+        return np.array([], dtype=float)
+    if not np.isfinite(values).any() or not np.isfinite(time_s).all():
+        return np.array([], dtype=float)
+
+    pause_mask = np.abs(values) < threshold
+    if not pause_mask.any():
+        return np.array([], dtype=float)
+
+    starts = np.where(~pause_mask[:-1] & pause_mask[1:])[0] + 1
+    ends = np.where(pause_mask[:-1] & ~pause_mask[1:])[0] + 1
+    if pause_mask[0]:
+        starts = np.insert(starts, 0, 0)
+    if pause_mask[-1]:
+        ends = np.append(ends, len(pause_mask))
+
+    durations = []
+    for start, end in zip(starts, ends):
+        if end - start < 2:
+            continue
+        duration = float(time_s[end - 1] - time_s[start])
+        if np.isfinite(duration) and duration > 0:
+            durations.append(duration)
+    return np.asarray(durations, dtype=float)
+
+
+def adaptive_pause_min_duration(angular_velocity, time_s, threshold, beta):
+    durations = pause_segment_durations(angular_velocity, time_s, threshold)
+    if len(durations) == 0:
+        return 0.0
+    return float(beta * np.nanmedian(durations))
+
+
 def count_pauses(angular_velocity, time_s, threshold, min_duration_s):
     values = np.asarray(angular_velocity, dtype=float)
     time_s = np.asarray(time_s, dtype=float)

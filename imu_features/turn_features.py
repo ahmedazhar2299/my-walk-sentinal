@@ -5,6 +5,7 @@ from .config import PipelineConfig
 from .utils import (
     SignalMeta,
     adaptive_amplitude_threshold,
+    adaptive_pause_min_duration,
     build_nan_feature_dict,
     count_pauses,
     detect_turn_window,
@@ -74,11 +75,18 @@ def extract_turn_features(df, meta, config, prefix):
     out[f"{prefix}_peak_angular_velocity"] = float(np.nanmax(ang_abs_for_stats))
     out[f"{prefix}_ang_vel_std"] = float(np.nanstd(ang_for_stats))
 
+    pause_min_duration_s = adaptive_pause_min_duration(
+        angular_velocity=ang_for_stats,
+        time_s=t_for_stats,
+        threshold=pause_threshold,
+        beta=config.turn_pause.adaptive_beta,
+    )
+
     pause_count, pause_time = count_pauses(
         angular_velocity=ang_for_stats,
         time_s=t_for_stats,
         threshold=pause_threshold,
-        min_duration_s=config.turn_pause.min_pause_duration_s,
+        min_duration_s=pause_min_duration_s,
     )
     out[f"{prefix}_pause_count"] = pause_count
     out[f"{prefix}_pause_time"] = pause_time
