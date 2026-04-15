@@ -279,23 +279,24 @@ def quiet_window_stats(signal, fs_hz, window_sec=1.0, min_samples=10):
 
     if best_slice is None:
         return np.nan, np.nan
+    baseline_mean = float(np.nanmean(best_slice))
     baseline_median = float(np.nanmedian(best_slice))
     spread_mad = float(np.nanmedian(np.abs(best_slice - baseline_median)))
-    return baseline_median, spread_mad
+    return baseline_mean, spread_mad
 
 
 def adaptive_amplitude_threshold(signal, fs_hz, config, k_value, min_value):
-    baseline_median, spread_mad = quiet_window_stats(
+    baseline_mean, spread_mad = quiet_window_stats(
         signal=signal,
         fs_hz=fs_hz,
         window_sec=config.quiet_window_sec,
         min_samples=config.min_window_samples,
     )
-    if not np.isfinite(baseline_median) or not np.isfinite(spread_mad) or spread_mad <= 0:
-        return min_value, baseline_median, spread_mad
+    if not np.isfinite(baseline_mean) or not np.isfinite(spread_mad) or spread_mad <= 0:
+        return min_value, baseline_mean, spread_mad
     return (
-        clamp_threshold(baseline_median + k_value * spread_mad, min_value),
-        baseline_median,
+        clamp_threshold(baseline_mean + k_value * spread_mad, min_value),
+        baseline_mean,
         spread_mad,
     )
 

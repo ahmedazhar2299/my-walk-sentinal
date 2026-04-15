@@ -119,7 +119,7 @@ Create `config_override.json`:
 
 The pipeline estimates a quiet baseline window in each file and uses:
 
-- threshold: `median_quiet + k * MAD_quiet`
+- threshold: `mean_quiet + k * MAD_quiet`
 
 This single adaptive threshold is applied to walk step peaks, turn detection, pause detection, and transition peak counting.
 
