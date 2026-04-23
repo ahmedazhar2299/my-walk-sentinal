@@ -285,6 +285,20 @@ def window_peak_to_peak(time_s, signal, window_sec=1.0):
     return np.asarray(starts, dtype=float), np.asarray(pp, dtype=float)
 
 
+def robust_p2p_threshold(time_s, signal, window_sec=1.0, k=1.0, fallback=np.nan):
+    _, pp = window_peak_to_peak(time_s, signal, window_sec=window_sec)
+    valid_pp = pp[np.isfinite(pp)]
+    if len(valid_pp) == 0:
+        return float(fallback) if np.isfinite(fallback) else np.nan, pp
+
+    median_pp = float(np.nanmedian(valid_pp))
+    mad_pp = float(np.nanmedian(np.abs(valid_pp - median_pp)))
+    threshold = median_pp + float(k) * mad_pp
+    if not np.isfinite(threshold):
+        threshold = float(fallback) if np.isfinite(fallback) else np.nan
+    return float(threshold), pp
+
+
 def adaptive_step_min_distance(time_s, candidate_peaks, alpha):
     time_s = np.asarray(time_s, dtype=float)
     candidate_peaks = np.asarray(candidate_peaks, dtype=int)
@@ -682,13 +696,18 @@ def detect_active_window(signal, time_s, min_duration_s=0.8, threshold=None, win
 
     if not np.isfinite(window_sec) or window_sec <= 0:
         window_sec = 1.0
-    min_amp = float(threshold) if np.isfinite(threshold) else 0.3
+
+    try:
+        min_amp = float(threshold)
+    except (TypeError, ValueError):
+        min_amp = np.nan
+    if not np.isfinite(min_amp):
+        min_amp = 0.3
     starts, pp = window_peak_to_peak(time_s, signal, window_sec=window_sec)
     if len(starts) == 0:
         return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), min_amp
 
     active_windows = np.isfinite(pp) & (pp >= min_amp)
-    active_windows = mask_close_gaps(active_windows, max_gap_samples=1)
     seg = largest_true_segment(active_windows)
     if seg is None:
         return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), min_amp

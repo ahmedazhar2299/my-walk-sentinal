@@ -46,7 +46,8 @@ class TurnPauseConfig:
 class WindowGateConfig:
     window_sec: float = 1.0
     walk_min_amp_threshold: float = 0.3
-    turn_min_amp_threshold: float = 0.3
+    turn_min_amp_threshold: float = 0.3  # fallback only if robust p2p threshold cannot be computed
+    turn_threshold_k: float = 1.0
     transition_min_amp_threshold: float = 0.3
     walk_min_duration_s: float = 1.0
     turn_min_duration_s: float = 0.8

@@ -15,6 +15,7 @@ from imu_features.utils import (
     detect_active_window as core_detect_active_window,
     detect_peaks,
     estimate_sampling_interval_s,
+    robust_p2p_threshold,
     preprocess_activity_dataframe,
     safe_gradient,
     select_motion_acc_signal,
@@ -713,15 +714,16 @@ def exact_compare_fixed_window_summary(t, acc, fs_hz):
     return {'t_res': t_res, 'vm_bout': vm_bout, 'cad': cad, 'dominant_freq_hz': dominant_freq_hz, 'pp': pp, 'min_amp': min_amp, 'walk_mask': active_sec, 'start_time_s': start_time, 'end_time_s': end_time, 'duration_s': duration, 'step_count': step_count, 'cadence': cadence}
 
 
-
-def _turn_step_threshold(acc, turn_mask, meta):
+def _turn_thresholds(ang, t, meta):
     gate_cfg = _apply_notebook_window_gate_settings()
-    return float(gate_cfg.turn_min_amp_threshold)
-
-
-def _turn_thresholds(ang, meta):
-    gate_cfg = _apply_notebook_window_gate_settings()
-    return float(gate_cfg.turn_min_amp_threshold), float(gate_cfg.turn_min_amp_threshold)
+    turn_threshold, pp = robust_p2p_threshold(
+        time_s=t,
+        signal=ang,
+        window_sec=gate_cfg.window_sec,
+        k=getattr(gate_cfg, 'turn_threshold_k', 1.0),
+        fallback=gate_cfg.turn_min_amp_threshold,
+    )
+    return float(turn_threshold), float(turn_threshold), pp
 
 
 
@@ -902,15 +904,12 @@ def plot_turn_validation(activity_name, df, meta):
         ang_raw, src = select_turn_angular_signal(df, PIPELINE_CONFIG, meta.fs_hz)
     ang = np.abs(ang_raw)
 
-    turn_threshold, pause_threshold = _turn_thresholds(ang, meta)
+    turn_threshold, pause_threshold, turn_pp = _turn_thresholds(ang, t, meta)
     start_t, end_t, duration_t, turn_mask = _turn_window_from_threshold(ang, t, turn_threshold)
 
     acc, acc_src = select_motion_acc_signal(df, PIPELINE_CONFIG.prefer_useracc_for_motion)
-    step_count_turn = 0
-    step_threshold = np.nan
     acc_turn = np.array([], dtype=float)
     t_turn = np.array([], dtype=float)
-    peaks_turn = np.array([], dtype=int)
     turn_wavelet = {
         't_res': np.array([]),
         'cad': np.array([]),
@@ -927,34 +926,9 @@ def plot_turn_validation(activity_name, df, meta):
         acc_turn = acc[idx]
         t_turn = t[idx]
         fs_turn = (1.0 / estimate_sampling_interval_s(t_turn)) if len(t_turn) > 2 else meta.fs_hz
-        step_threshold = _turn_step_threshold(acc, turn_mask, meta)
-        rough_turn_peaks = detect_peaks(acc_turn, fs_turn, np.nan, step_threshold)
-        step_min_distance_s = _adaptive_step_min_distance(t_turn, rough_turn_peaks)
-        peaks_turn = detect_peaks(acc_turn, fs_turn, step_min_distance_s, step_threshold)
-        step_count_turn = int(len(peaks_turn))
         turn_wavelet = exact_compare_fixed_window_summary(t_turn, acc_turn, fs_turn)
 
-    # Plot turn step peaks (walk-style) before angular-velocity plots.
-    plt.figure(figsize=(10, 4))
-    if len(t_turn):
-        plt.plot(t_turn, acc_turn, label='signal')
-        if np.isfinite(step_threshold):
-            plt.axhline(step_threshold, color='orange', ls='--', linewidth=1.5, label=f'step threshold={step_threshold:.3f}')
-        if len(peaks_turn):
-            plt.scatter(t_turn[peaks_turn], acc_turn[peaks_turn], c='red', s=25, label=f'steps={len(peaks_turn)}')
-    else:
-        plt.plot(t, acc, label=acc_src)
-    if np.isfinite(start_t):
-        plt.axvline(start_t, color='green', ls='--', linewidth=1.5, label='turn start')
-    if np.isfinite(end_t):
-        plt.axvline(end_t, color='gray', ls='--', linewidth=1.5, label='turn end')
-    plt.title(f"{activity_name}: Step Peaks in Turn Window")
-    plt.xlabel('Time (s)')
-    plt.ylabel('Acceleration Magnitude')
-    plt.grid(alpha=0.3)
-    plt.legend(loc='upper right', fontsize=7, framealpha=0.80, borderpad=0.25, labelspacing=0.25, handlelength=1.6)
-    plt.text(0.01, 0.98, f"start={start_t:.3f} | end={end_t:.3f} | duration={duration_t:.2f}s | steps={step_count_turn} | thr={step_threshold:.3f}", transform=plt.gca().transAxes, va='top')
-    plt.show()
+    step_count_turn = float(turn_wavelet.get('step_count', np.nan)) if len(t_turn) else np.nan
 
     if len(turn_wavelet['t_res']):
         fig, ax1 = plt.subplots(figsize=(10, 4))
@@ -1025,8 +999,48 @@ def plot_turn_validation(activity_name, df, meta):
 
     plt.figure(figsize=(10, 4))
     plt.plot(t, ang, label=f'angular_velocity ({src})')
+
+    env_times, env_min, env_max, env_mid = _window_signal_envelope(
+        t,
+        ang,
+        window_sec=PIPELINE_CONFIG.window_gate.window_sec,
+    )
+    if len(env_times) == len(env_mid):
+        valid_env = np.isfinite(env_min) & np.isfinite(env_max)
+        if np.any(valid_env):
+            plt.fill_between(
+                env_times[valid_env],
+                env_min[valid_env],
+                env_max[valid_env],
+                step='post',
+                color='crimson',
+                alpha=0.10,
+                label='min-max',
+            )
+
+    if len(turn_pp):
+        pp_times = t[0] + np.arange(len(turn_pp), dtype=float) * PIPELINE_CONFIG.window_gate.window_sec
+        valid_pp = np.isfinite(turn_pp)
+        if np.any(valid_pp):
+            plt.step(
+                pp_times[valid_pp],
+                turn_pp[valid_pp],
+                where='post',
+                color='crimson',
+                linewidth=2.0,
+                alpha=0.9,
+                label='window p2p',
+            )
     if np.isfinite(turn_threshold):
-        plt.axhline(turn_threshold, color='orange', ls='--', linewidth=1.5, alpha=0.9, label=f'threshold={turn_threshold:.3f}')
+        plt.axhline(
+            turn_threshold,
+            color='firebrick',
+            ls='--',
+            linewidth=2.2,
+            alpha=1.0,
+            zorder=6,
+            label=f'threshold={turn_threshold:.3f}',
+        )
     if np.isfinite(start_t):
         plt.axvline(start_t, color='green', ls='--', label='turn start')
     if np.isfinite(end_t):
@@ -1036,7 +1050,7 @@ def plot_turn_validation(activity_name, df, meta):
     plt.ylabel('Angular Velocity (abs)')
     plt.grid(alpha=0.3)
     plt.legend(loc='upper right', fontsize=7, framealpha=0.80, borderpad=0.25, labelspacing=0.25, handlelength=1.6)
-    plt.text(0.01, 0.98, f"start={start_t:.3f} | end={end_t:.3f} | duration={duration_t:.2f}s | steps={step_count_turn} | thr={step_threshold:.3f}", transform=plt.gca().transAxes, va='top')
+    plt.text(0.01, 0.98, f"start={start_t:.3f} | end={end_t:.3f} | duration={duration_t:.2f}s | wavelet_steps={step_count_turn:.1f} | turn_thr={turn_threshold:.3f}", transform=plt.gca().transAxes, va='top')
     plt.show()
 
     plt.figure(figsize=(10, 4))
@@ -1066,9 +1080,8 @@ def plot_turn_validation(activity_name, df, meta):
         'start_time_s': start_t,
         'end_time_s': end_t,
         'duration_s': duration_t,
-        'step_count': step_count_turn,
-        'wavelet_step_count': float(turn_wavelet.get('step_count', np.nan)),
-        'wavelet_cadence': float(turn_wavelet.get('cadence', np.nan)),
+        'step_count': float(step_count_turn),
+        'pause_duration': float(pause_time),
     }
     return summary, {'time': t, 'signal': ang, 'summary': summary, 'fs_hz': meta.fs_hz}
 

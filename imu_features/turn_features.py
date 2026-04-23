@@ -8,6 +8,7 @@ from .utils import (
     build_nan_feature_dict,
     count_pauses,
     detect_turn_window,
+    robust_p2p_threshold,
     safe_gradient,
     select_turn_angular_signal,
     spectral_entropy,
@@ -39,7 +40,13 @@ def extract_turn_features(df, meta, config, prefix):
     time_s = df["time_s"].to_numpy(dtype=float)
     angular_signal, _ = select_turn_angular_signal(df, config, meta.fs_hz)
     angular_abs = np.abs(angular_signal)
-    turn_threshold = float(config.window_gate.turn_min_amp_threshold)
+    turn_threshold, _ = robust_p2p_threshold(
+        time_s=time_s,
+        signal=angular_abs,
+        window_sec=config.window_gate.window_sec,
+        k=config.window_gate.turn_threshold_k,
+        fallback=config.window_gate.turn_min_amp_threshold,
+    )
     pause_threshold = turn_threshold
 
     start_t, end_t, duration, turn_mask = detect_turn_window(

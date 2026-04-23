@@ -115,6 +115,7 @@ Create `config_override.json`:
     "window_sec": 1.0,
     "walk_min_amp_threshold": 0.3,
     "turn_min_amp_threshold": 0.3,
+    "turn_threshold_k": 1.0,
     "transition_min_amp_threshold": 0.3
   }
 }
