@@ -578,7 +578,16 @@ def _compare_find_continuous_dominant_peaks(valid_peaks, min_t=3, delta=20):
     valid_peaks = np.asarray(valid_peaks, dtype=float)
     if valid_peaks.size == 0:
         return valid_peaks
+
     num_rows, num_cols = valid_peaks.shape
+    min_t = max(1, int(min_t))
+
+    # If the user allows a single accepted window, or the bout is too short to
+    # evaluate continuity, keep the currently valid peaks as-is.
+    if num_cols <= 1 or min_t <= 1:
+        return np.where(valid_peaks > 0, 1, 0)
+
+    min_t = min(min_t, num_cols)
     extended_peaks = np.zeros((num_rows, num_cols + 1), dtype=valid_peaks.dtype)
     extended_peaks[:, :num_cols] = valid_peaks
     cont_peaks = np.zeros_like(extended_peaks)
