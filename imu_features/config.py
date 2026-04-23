@@ -26,8 +26,15 @@ class FilterConfig:
 
 
 @dataclass
-class StepDetectionConfig:
-    adaptive_alpha: float = 0.5
+class WaveletStepConfig:
+    resample_fs_hz: int = 10
+    walk_min_amp_threshold: float = 0.3
+    min_active_windows: int = 3
+    step_freq_min_hz: float = 0.8
+    step_freq_max_hz: float = 2.3
+    alpha: float = 0.6
+    beta: float = 2.5
+    delta: int = 20
 
 
 @dataclass
@@ -36,17 +43,14 @@ class TurnPauseConfig:
 
 
 @dataclass
-class AdaptiveThresholdConfig:
-    quiet_window_sec: float = 1.0
-    min_window_samples: int = 10
-    step_threshold_k: float = 4.0
-    turn_threshold_k: float = 3.0
-    pause_threshold_k: float = 1.5
-    transition_threshold_k: float = 2.0
-    step_threshold_min: float = 0.05
-    turn_threshold_min: float = 0.05
-    pause_threshold_min: float = 0.02
-    transition_threshold_min: float = 0.03
+class WindowGateConfig:
+    window_sec: float = 1.0
+    walk_min_amp_threshold: float = 0.3
+    turn_min_amp_threshold: float = 0.3
+    transition_min_amp_threshold: float = 0.3
+    walk_min_duration_s: float = 1.0
+    turn_min_duration_s: float = 0.8
+    transition_min_duration_s: float = 0.5
 
 
 @dataclass
@@ -58,9 +62,9 @@ class PipelineConfig:
     prefer_useracc_for_motion: bool = True
     column_candidates: dict = field(default_factory=_default_column_candidates)
     filtering: FilterConfig = field(default_factory=FilterConfig)
-    step_detection: StepDetectionConfig = field(default_factory=StepDetectionConfig)
+    wavelet_steps: WaveletStepConfig = field(default_factory=WaveletStepConfig)
     turn_pause: TurnPauseConfig = field(default_factory=TurnPauseConfig)
-    adaptive_thresholds: AdaptiveThresholdConfig = field(default_factory=AdaptiveThresholdConfig)
+    window_gate: WindowGateConfig = field(default_factory=WindowGateConfig)
 
     def to_dict(self):
         return asdict(self)

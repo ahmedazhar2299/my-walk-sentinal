@@ -4,15 +4,13 @@ import pandas as pd
 from .config import PipelineConfig
 from .utils import (
     SignalMeta,
-    adaptive_amplitude_threshold,
-    adaptive_step_min_distance,
     build_nan_feature_dict,
-    detect_peaks,
-    detect_walk_window_from_peaks,
+    detect_active_window,
     dominant_frequency,
     rms,
     select_motion_acc_signal,
     spectral_entropy,
+    wavelet_step_summary,
 )
 
 WALK_FEATURE_NAMES = [
@@ -65,50 +63,44 @@ def extract_walk_features(df, meta, config):
     out = build_nan_feature_dict(WALK_FEATURE_NAMES)
     time_s = df["time_s"].to_numpy(dtype=float)
     acc_signal, acc_source = select_motion_acc_signal(df, config.prefer_useracc_for_motion)
-
-    step_threshold, _, _ = adaptive_amplitude_threshold(
-        signal=acc_signal,
-        fs_hz=meta.fs_hz,
-        config=config.adaptive_thresholds,
-        k_value=config.adaptive_thresholds.step_threshold_k,
-        min_value=config.adaptive_thresholds.step_threshold_min,
-    )
-
-    rough_peaks = detect_peaks(
-        signal=acc_signal,
-        fs_hz=meta.fs_hz,
-        min_distance_s=np.nan,
-        height=step_threshold,
-    )
-    step_min_distance_s = adaptive_step_min_distance(
+    wavelet = wavelet_step_summary(
         time_s=time_s,
-        candidate_peaks=rough_peaks,
-        alpha=config.step_detection.adaptive_alpha,
-    )
-
-    peaks = detect_peaks(
         signal=acc_signal,
-        fs_hz=meta.fs_hz,
-        min_distance_s=step_min_distance_s,
-        height=step_threshold,
+        wavelet_config=config.wavelet_steps,
+        fixed_window=False,
     )
 
-    start_t, end_t, duration, walk_mask = detect_walk_window_from_peaks(
-        acc_signal=acc_signal, time_s=time_s, peaks=peaks
-    )
-    if np.isfinite(start_t) and np.isfinite(end_t) and np.any(walk_mask):
-        peaks = peaks[(time_s[peaks] >= start_t) & (time_s[peaks] <= end_t)]
-    step_count = float(len(peaks))
+    start_t = float(wavelet.get("start_time_s", np.nan))
+    end_t = float(wavelet.get("end_time_s", np.nan))
+    duration = float(wavelet.get("duration_s", np.nan))
+    step_count = float(wavelet.get("step_count", np.nan))
+    cadence = float(wavelet.get("cadence", np.nan))
+
+    if np.isfinite(start_t) and np.isfinite(end_t):
+        walk_mask = (time_s >= start_t) & (time_s <= end_t)
+    else:
+        start_t, end_t, duration, walk_mask, _ = detect_active_window(
+            acc_signal,
+            time_s,
+            min_duration_s=config.window_gate.walk_min_duration_s,
+            threshold=config.window_gate.walk_min_amp_threshold,
+            window_sec=config.window_gate.window_sec,
+        )
+
     out["walk_duration"] = duration
     out["step_count"] = step_count
-    out["cadence"] = 60.0 * step_count / duration if np.isfinite(duration) and duration > 0 else np.nan
+    out["cadence"] = cadence if np.isfinite(cadence) else (
+        60.0 * step_count / duration if np.isfinite(duration) and duration > 0 else np.nan
+    )
     out["walking_speed"] = (
         config.walk_distance_m / duration if np.isfinite(duration) and duration > 0 else np.nan
     )
 
     step_time_mean = np.nan
-    if len(peaks) >= 2:
-        step_times = np.diff(time_s[peaks])
+    active_cad = np.asarray(wavelet.get("cad", []), dtype=float)
+    active_cad = active_cad[np.isfinite(active_cad) & (active_cad > 0)]
+    if len(active_cad):
+        step_times = 1.0 / active_cad
         step_time_mean = float(np.nanmean(step_times))
         step_time_std = float(np.nanstd(step_times))
         out["mean_step_time"] = step_time_mean

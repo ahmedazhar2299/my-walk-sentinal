@@ -101,32 +101,32 @@ Create `config_override.json`:
     "cutoff_hz": 5.0,
     "order": 4
   },
-  "step_detection": {
-    "adaptive_alpha": 0.5
+  "wavelet_steps": {
+    "resample_fs_hz": 10,
+    "walk_min_amp_threshold": 0.3,
+    "min_active_windows": 3,
+    "step_freq_min_hz": 0.8,
+    "step_freq_max_hz": 2.3
   },
   "turn_pause": {
     "adaptive_beta": 0.5
   },
-  "adaptive_thresholds": {
-    "quiet_window_sec": 1.0,
-    "step_threshold_k": 4.0,
-    "turn_threshold_k": 3.0,
-    "pause_threshold_k": 1.5,
-    "transition_threshold_k": 2.0
+  "window_gate": {
+    "window_sec": 1.0,
+    "walk_min_amp_threshold": 0.3,
+    "turn_min_amp_threshold": 0.3,
+    "transition_min_amp_threshold": 0.3
   }
 }
 ```
 
-The pipeline estimates a quiet baseline window in each file and uses:
+The pipeline now uses a fixed window gate instead of the old adaptive thresholding path:
 
-- threshold: `mean_quiet + k * MAD_quiet`
-
-This single adaptive threshold is applied to walk step peaks, turn detection, pause detection, and transition peak counting.
-
-Timing constraints are also adapted in two passes:
-
-- `step_min_distance_s = alpha * median(step_intervals_from_rough_peaks)`
-- `pause_min_duration_s = beta * median(candidate_pause_durations)`
+- walk activity gate: `max(window) - min(window) >= walk_min_amp_threshold`
+- turn activity gate: `max(window) - min(window) >= turn_min_amp_threshold`
+- transition activity gate: `max(window) - min(window) >= transition_min_amp_threshold`
+- walk step count / cadence: wavelet-based cadence estimate with `wavelet_steps.walk_min_amp_threshold`
+- turn pauses: same `turn_min_amp_threshold` rule, where above threshold means turning and below threshold means pause, plus adaptive pause duration
 
 Run:
 

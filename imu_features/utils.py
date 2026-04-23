@@ -3,7 +3,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy import interpolate
 from scipy.signal import butter, filtfilt, find_peaks, welch
+from scipy.signal.windows import tukey
 from scipy.stats import entropy as scipy_entropy
 
 from .config import PipelineConfig
@@ -241,64 +243,46 @@ def detect_peaks(signal, fs_hz, min_distance_s, height=None):
     return peaks.astype(int)
 
 
-def clamp_threshold(value, min_value):
-    if not np.isfinite(value):
-        return min_value
-    return float(max(value, min_value))
+def window_peak_to_peak(time_s, signal, window_sec=1.0):
+    time_s = np.asarray(time_s, dtype=float)
+    signal = np.asarray(signal, dtype=float)
+    if len(time_s) != len(signal) or len(time_s) == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+    if not np.isfinite(window_sec) or window_sec <= 0:
+        window_sec = 1.0
 
+    valid = np.isfinite(time_s) & np.isfinite(signal)
+    time_s = time_s[valid]
+    signal = signal[valid]
+    if len(time_s) == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
 
-def quiet_window_stats(signal, fs_hz, window_sec=1.0, min_samples=10):
-    values = np.asarray(signal, dtype=float)
-    finite = np.isfinite(values)
-    if finite.sum() < max(3, min_samples):
-        return np.nan, np.nan
+    t0 = float(time_s[0])
+    t1 = float(time_s[-1])
+    if not np.isfinite(t0) or not np.isfinite(t1) or t1 < t0:
+        return np.array([], dtype=float), np.array([], dtype=float)
 
-    x_axis = np.arange(len(values), dtype=float)
-    filled = _fill_nans_linear(values, x_axis)
-    if np.isnan(filled).all():
-        return np.nan, np.nan
+    n_windows = int(np.floor((t1 - t0) / window_sec)) + 1
+    if n_windows <= 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
 
-    if np.isfinite(fs_hz) and fs_hz > 0 and np.isfinite(window_sec) and window_sec > 0:
-        window_n = int(round(window_sec * fs_hz))
-    else:
-        window_n = min_samples
-    window_n = max(min_samples, window_n)
-    window_n = min(window_n, len(filled))
-    if window_n < 3:
-        return np.nan, np.nan
+    starts = []
+    pp = []
+    for i in range(n_windows):
+        start_t = t0 + i * window_sec
+        end_t = start_t + window_sec
+        if i == n_windows - 1:
+            mask = (time_s >= start_t) & (time_s <= end_t)
+        else:
+            mask = (time_s >= start_t) & (time_s < end_t)
+        window = signal[mask]
+        starts.append(start_t)
+        if len(window) == 0:
+            pp.append(np.nan)
+        else:
+            pp.append(float(np.nanmax(window) - np.nanmin(window)))
 
-    best_spread = np.inf
-    best_slice = None
-    for start in range(0, len(filled) - window_n + 1):
-        window = filled[start : start + window_n]
-        window_median = float(np.nanmedian(window))
-        window_mad = float(np.nanmedian(np.abs(window - window_median)))
-        if np.isfinite(window_mad) and window_mad < best_spread:
-            best_spread = window_mad
-            best_slice = window
-
-    if best_slice is None:
-        return np.nan, np.nan
-    baseline_mean = float(np.nanmean(best_slice))
-    baseline_median = float(np.nanmedian(best_slice))
-    spread_mad = float(np.nanmedian(np.abs(best_slice - baseline_median)))
-    return baseline_mean, spread_mad
-
-
-def adaptive_amplitude_threshold(signal, fs_hz, config, k_value, min_value):
-    baseline_mean, spread_mad = quiet_window_stats(
-        signal=signal,
-        fs_hz=fs_hz,
-        window_sec=config.quiet_window_sec,
-        min_samples=config.min_window_samples,
-    )
-    if not np.isfinite(baseline_mean) or not np.isfinite(spread_mad) or spread_mad <= 0:
-        return min_value, baseline_mean, spread_mad
-    return (
-        clamp_threshold(baseline_mean + k_value * spread_mad, min_value),
-        baseline_mean,
-        spread_mad,
-    )
+    return np.asarray(starts, dtype=float), np.asarray(pp, dtype=float)
 
 
 def adaptive_step_min_distance(time_s, candidate_peaks, alpha):
@@ -313,6 +297,271 @@ def adaptive_step_min_distance(time_s, candidate_peaks, alpha):
         return np.nan
 
     return float(alpha * np.nanmedian(dt))
+
+
+def _wavelet_adjust_bout(values, fs_hz):
+    values = np.asarray(values, dtype=float)
+    if len(values) == 0 or not np.isfinite(fs_hz) or fs_hz <= 0:
+        return np.array([])
+
+    rem = len(values) % int(fs_hz)
+    if rem >= int(np.ceil(0.7 * fs_hz)):
+        pad_n = int(fs_hz) - rem
+        if pad_n < fs_hz:
+            values = np.append(values, np.repeat(values[-1], pad_n))
+    elif rem != 0:
+        values = values[: (len(values) // int(fs_hz)) * int(fs_hz)]
+    return values
+
+
+def _wavelet_preprocess_bout(time_s, signal, fs_hz):
+    time_s = np.asarray(time_s, dtype=float)
+    signal = np.asarray(signal, dtype=float)
+    keep = np.isfinite(time_s) & np.isfinite(signal)
+    time_s = time_s[keep]
+    signal = signal[keep]
+    if len(time_s) < 2 or len(signal) < 2 or not np.isfinite(fs_hz) or fs_hz <= 0:
+        return np.array([]), np.array([])
+
+    t_rel = time_s - time_s[0]
+    t_interp = np.arange(t_rel[0], t_rel[-1], 1.0 / fs_hz)
+    if len(t_interp) < 2:
+        return np.array([]), np.array([])
+
+    t_interp = t_interp + time_s[0]
+    interp_fn = interpolate.interp1d(time_s, signal, bounds_error=False, fill_value="extrapolate")
+    signal_interp = interp_fn(t_interp)
+    signal_interp = _wavelet_adjust_bout(signal_interp, fs_hz)
+    t_interp = t_interp[: len(signal_interp)]
+    if len(signal_interp) < int(fs_hz):
+        return np.array([]), np.array([])
+    return t_interp, signal_interp
+
+
+def _wavelet_compute_cwt(signal, fs_hz):
+    signal = np.asarray(signal, dtype=float)
+    if len(signal) < int(fs_hz):
+        return np.array([]), np.array([[]])
+
+    try:
+        from ssqueezepy import ssq_cwt
+    except Exception:
+        return np.array([]), np.array([[]])
+
+    window = tukey(len(signal), alpha=0.02, sym=True)
+    padded = np.concatenate((np.zeros(5 * int(fs_hz)), signal * window, np.zeros(5 * int(fs_hz))))
+    _, Wx, ssq_freqs, *_ = ssq_cwt(
+        padded[:-1],
+        wavelet=("gmw", {"beta": 90, "gamma": 3}),
+        fs=fs_hz,
+    )
+    coefs = np.abs(Wx.astype("complex128") ** 2)
+    coefs = np.append(coefs, coefs[:, -1:], axis=1)
+
+    freqs_interp = np.arange(0.5, 4.5, 0.05)
+    coefs_interp = np.vstack(
+        [
+            np.interp(freqs_interp, ssq_freqs[::-1], coefs[:, j][::-1])
+            for j in range(coefs.shape[1])
+        ]
+    ).T
+    coefs_interp = coefs_interp[:, 5 * int(fs_hz) : -5 * int(fs_hz)]
+    return freqs_interp, coefs_interp
+
+
+def _wavelet_identify_peaks(freqs_interp, coefs_interp, fs_hz, step_freq, alpha, beta):
+    if coefs_interp.size == 0:
+        return np.array([[]])
+
+    num_rows, num_cols = coefs_interp.shape
+    num_cols_sec = int(num_cols / int(fs_hz))
+    dominant = np.zeros((num_rows, num_cols_sec))
+    loc_min = np.argmin(np.abs(freqs_interp - step_freq[0]))
+    loc_max = np.argmin(np.abs(freqs_interp - step_freq[1]))
+
+    for i in range(num_cols_sec):
+        x_start = i * int(fs_hz)
+        x_end = (i + 1) * int(fs_hz)
+        window = np.sum(coefs_interp[:, np.arange(x_start, x_end)], axis=1)
+        locs = detect_peaks(window, fs_hz=np.nan, min_distance_s=np.nan, height=None)
+        locs = np.asarray(locs, dtype=int)
+        if len(locs) == 0:
+            continue
+
+        pks = window[locs]
+        order = np.argsort(-pks)
+        locs = locs[order]
+        pks = pks[order]
+
+        in_range_idx = None
+        for j, loc_j in enumerate(locs):
+            if loc_min <= loc_j <= loc_max:
+                in_range_idx = j
+                break
+        if in_range_idx is None:
+            continue
+
+        peak_vec = np.zeros(num_rows)
+        if locs[0] > loc_max:
+            if pks[0] / pks[in_range_idx] < beta:
+                peak_vec[locs[in_range_idx]] = 1
+        elif locs[0] < loc_min:
+            if pks[0] / pks[in_range_idx] < alpha:
+                peak_vec[locs[in_range_idx]] = 1
+        else:
+            peak_vec[locs[in_range_idx]] = 1
+        dominant[:, i] = peak_vec
+    return dominant
+
+
+def _wavelet_find_continuous_peaks(valid_peaks, min_t, delta):
+    valid_peaks = np.asarray(valid_peaks, dtype=float)
+    if valid_peaks.size == 0:
+        return valid_peaks
+
+    num_rows, num_cols = valid_peaks.shape
+    extended = np.zeros((num_rows, num_cols + 1), dtype=valid_peaks.dtype)
+    extended[:, :num_cols] = valid_peaks
+    cont_peaks = np.zeros_like(extended)
+
+    for slice_ind in range(num_cols + 1 - min_t):
+        slice_mat = extended[:, slice_ind : slice_ind + min_t].copy()
+        windows = list(range(min_t)) + list(range(min_t - 2, -1, -1))
+        stop = True
+        for win_ind in windows:
+            present_rows = np.where(slice_mat[:, win_ind] != 0)[0]
+            stop = True
+            for row_idx in present_rows:
+                index = np.arange(max(0, row_idx - delta), min(row_idx + delta + 1, num_rows))
+                peaks1 = slice_mat[row_idx, win_ind]
+                peaks2 = peaks1
+                if win_ind == 0:
+                    peaks1 += slice_mat[index, win_ind + 1]
+                elif win_ind == min_t - 1:
+                    peaks1 += slice_mat[index, win_ind - 1]
+                else:
+                    peaks1 += slice_mat[index, win_ind - 1]
+                    peaks2 += slice_mat[index, win_ind + 1]
+
+                if win_ind == 0 or win_ind == min_t - 1:
+                    if np.any(peaks1 > 1):
+                        stop = False
+                    else:
+                        slice_mat[row_idx, win_ind] = 0
+                else:
+                    if np.any(peaks1 > 1) and np.any(peaks2 > 1):
+                        stop = False
+                    else:
+                        slice_mat[row_idx, win_ind] = 0
+            if stop:
+                break
+        if not stop:
+            cont_peaks[:, slice_ind : slice_ind + min_t] += slice_mat
+
+    cont_peaks = np.where(cont_peaks > 0, 1, 0)
+    return cont_peaks[:, :num_cols]
+
+
+def wavelet_step_summary(time_s, signal, wavelet_config, fixed_window=False):
+    compare_fs = int(wavelet_config.resample_fs_hz)
+    min_amp = float(
+        getattr(
+            wavelet_config,
+            "walk_min_amp_threshold",
+            getattr(wavelet_config, "min_amp_threshold", 0.3),
+        )
+    )
+    min_t = int(wavelet_config.min_active_windows)
+    step_freq = (
+        float(wavelet_config.step_freq_min_hz),
+        float(wavelet_config.step_freq_max_hz),
+    )
+
+    t_res, signal_bout = _wavelet_preprocess_bout(time_s, signal, compare_fs)
+    if len(signal_bout) < compare_fs:
+        return {
+            "t_res": np.array([]),
+            "signal_bout": np.array([]),
+            "cad": np.array([]),
+            "dominant_freq_hz": np.array([]),
+            "pp": np.array([]),
+            "min_amp": min_amp,
+            "active_mask": np.array([], dtype=bool),
+            "start_time_s": np.nan,
+            "end_time_s": np.nan,
+            "duration_s": np.nan,
+            "step_count": np.nan,
+            "cadence": np.nan,
+        }
+
+    pp = np.ptp(signal_bout.reshape((compare_fs, -1), order="F"), axis=0)
+    valid = np.ones(len(pp), dtype=bool)
+    valid[pp < min_amp] = False
+    cad = np.zeros(len(pp), dtype=float)
+    dominant_freq_hz = np.full(len(pp), np.nan, dtype=float)
+
+    if np.sum(valid) >= min_t:
+        tapered_bout = signal_bout[np.repeat(valid, compare_fs)]
+        freqs_interp, coefs_interp = _wavelet_compute_cwt(tapered_bout, compare_fs)
+        if coefs_interp.size:
+            dp = _wavelet_identify_peaks(
+                freqs_interp,
+                coefs_interp,
+                compare_fs,
+                step_freq,
+                wavelet_config.alpha,
+                wavelet_config.beta,
+            )
+            valid_peaks = np.zeros((dp.shape[0], len(valid)))
+            valid_peaks[:, valid] = dp
+            cont_peaks = _wavelet_find_continuous_peaks(
+                valid_peaks,
+                min_t=min_t,
+                delta=int(wavelet_config.delta),
+            )
+            for i in range(len(cad)):
+                ind_freqs = np.where(cont_peaks[:, i] > 0)[0]
+                if len(ind_freqs) > 0:
+                    dominant_freq_hz[i] = freqs_interp[ind_freqs[0]]
+                    cad[i] = freqs_interp[ind_freqs[0]]
+
+    active_mask = cad > 0
+    if fixed_window:
+        start_time_s = float(time_s[0]) if len(time_s) else np.nan
+        end_time_s = float(time_s[-1]) if len(time_s) else np.nan
+        duration_s = float(end_time_s - start_time_s) if np.isfinite(start_time_s) and np.isfinite(end_time_s) else np.nan
+        step_count = float(np.nansum(cad[active_mask])) if np.any(active_mask) else 0.0
+        cadence = float((step_count / duration_s) * 60.0) if np.isfinite(duration_s) and duration_s > 0 else np.nan
+    elif np.any(active_mask):
+        first_sec = np.where(active_mask)[0][0]
+        last_sec = np.where(active_mask)[0][-1]
+        start_time_s = float(t_res[first_sec * compare_fs])
+        end_idx = min(len(t_res) - 1, (last_sec + 1) * compare_fs - 1)
+        end_time_s = float(t_res[end_idx])
+        duration_s = float(end_time_s - start_time_s)
+        step_count = float(np.nansum(cad[active_mask]))
+        cadence = float(np.nanmean(cad[active_mask]) * 60.0)
+    else:
+        start_time_s = np.nan
+        end_time_s = np.nan
+        duration_s = np.nan
+        step_count = 0.0
+        cadence = np.nan
+
+    return {
+        "t_res": t_res,
+        "signal_bout": signal_bout,
+        "cad": cad,
+        "dominant_freq_hz": dominant_freq_hz,
+        "pp": pp,
+        "min_amp": min_amp,
+        "active_mask": active_mask,
+        "start_time_s": start_time_s,
+        "end_time_s": end_time_s,
+        "duration_s": duration_s,
+        "step_count": step_count,
+        "cadence": cadence,
+    }
 
 
 def pause_segment_durations(angular_velocity, time_s, threshold):
@@ -425,120 +674,45 @@ def largest_true_segment(mask):
     return best
 
 
-def detect_active_window(signal, time_s, min_duration_s=0.8, threshold=None):
+def detect_active_window(signal, time_s, min_duration_s=0.8, threshold=None, window_sec=1.0):
     signal = np.asarray(signal, dtype=float)
     time_s = np.asarray(time_s, dtype=float)
     if len(signal) == 0 or len(time_s) == 0:
         return np.nan, np.nan, np.nan, np.zeros(0, dtype=bool), np.nan
 
-    fs_hz = 1.0 / estimate_sampling_interval_s(time_s) if len(time_s) > 2 else np.nan
-    baseline = np.nanmedian(signal)
-    motion = np.abs(signal - baseline)
+    if not np.isfinite(window_sec) or window_sec <= 0:
+        window_sec = 1.0
+    min_amp = float(threshold) if np.isfinite(threshold) else 0.3
+    starts, pp = window_peak_to_peak(time_s, signal, window_sec=window_sec)
+    if len(starts) == 0:
+        return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), min_amp
 
-    if threshold is None:
-        if np.isfinite(motion).any():
-            q70 = np.nanpercentile(motion, 70)
-            q90 = np.nanpercentile(motion, 90)
-            threshold = q70 + 0.15 * (q90 - q70) if np.isfinite(q70) and np.isfinite(q90) else np.nan
-        else:
-            threshold = np.nan
-
-    if not np.isfinite(threshold):
-        return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), np.nan
-
-    active = np.isfinite(motion) & (motion >= threshold)
-    if np.isfinite(fs_hz) and fs_hz > 0:
-        active = mask_close_gaps(active, max_gap_samples=max(1, int(0.25 * fs_hz)))
-
-    seg = largest_true_segment(active)
+    active_windows = np.isfinite(pp) & (pp >= min_amp)
+    active_windows = mask_close_gaps(active_windows, max_gap_samples=1)
+    seg = largest_true_segment(active_windows)
     if seg is None:
-        return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), threshold
+        return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), min_amp
 
-    i0, i1 = seg
-    start_t = float(time_s[i0])
-    end_t = float(time_s[i1])
+    w0, w1 = seg
+    start_t = float(starts[w0])
+    end_t = float(min(time_s[-1], starts[w1] + window_sec))
     duration = float(end_t - start_t)
     if duration < min_duration_s:
-        return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), threshold
+        return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), min_amp
 
-    mask = np.zeros(len(time_s), dtype=bool)
-    mask[i0 : i1 + 1] = True
-    return start_t, end_t, duration, mask, threshold
+    mask = (time_s >= start_t) & (time_s <= end_t) & np.isfinite(signal)
+    return start_t, end_t, duration, mask, min_amp
 
 
-def detect_walk_window_from_peaks(acc_signal, time_s, peaks):
-    acc_signal = np.asarray(acc_signal, dtype=float)
-    time_s = np.asarray(time_s, dtype=float)
-    peaks = np.asarray(peaks, dtype=int)
-    if len(time_s) == 0:
-        return np.nan, np.nan, np.nan, np.zeros(0, dtype=bool)
-
-    motion_start, motion_end, _, _, _ = detect_active_window(acc_signal, time_s, min_duration_s=1.0)
-
-    if len(peaks) >= 2:
-        step_dt = np.diff(time_s[peaks])
-        pad = float(np.nanmedian(step_dt) * 0.20) if len(step_dt) else 0.12
-        pad = pad if np.isfinite(pad) and pad > 0 else 0.12
-        start_t = max(float(time_s[0]), float(time_s[peaks[0]] - pad))
-        end_t = min(float(time_s[-1]), float(time_s[peaks[-1]] + pad))
-        if np.isfinite(motion_start):
-            start_t = min(start_t, float(motion_start))
-        if np.isfinite(motion_end):
-            end_t = max(end_t, float(motion_end))
-        start_t = max(float(time_s[0]), start_t)
-        end_t = min(float(time_s[-1]), end_t)
-        if end_t > start_t:
-            mask = (time_s >= start_t) & (time_s <= end_t)
-            return start_t, end_t, float(end_t - start_t), mask
-
-    start_t, end_t, duration, mask, _ = detect_active_window(acc_signal, time_s, min_duration_s=1.0)
+def detect_turn_window(angular_signal_abs, time_s, threshold, window_sec=1.0):
+    start_t, end_t, duration, mask, _ = detect_active_window(
+        angular_signal_abs,
+        time_s,
+        min_duration_s=0.8,
+        threshold=threshold,
+        window_sec=window_sec,
+    )
     return start_t, end_t, duration, mask
-
-
-def detect_turn_window(angular_signal_abs, time_s, threshold):
-    angular_signal_abs = np.asarray(angular_signal_abs, dtype=float)
-    time_s = np.asarray(time_s, dtype=float)
-    if len(time_s) == 0:
-        return np.nan, np.nan, np.nan, np.zeros(0, dtype=bool)
-
-    fs_hz = 1.0 / estimate_sampling_interval_s(time_s) if len(time_s) > 2 else np.nan
-    active = np.isfinite(angular_signal_abs) & (angular_signal_abs >= threshold)
-    if np.isfinite(fs_hz) and fs_hz > 0:
-        active = mask_close_gaps(active, max_gap_samples=max(1, int(0.60 * fs_hz)))
-
-    min_run = max(1, int(0.25 * fs_hz)) if np.isfinite(fs_hz) and fs_hz > 0 else 1
-    cleaned = np.zeros(len(active), dtype=bool)
-    i = 0
-    while i < len(active):
-        if not active[i]:
-            i += 1
-            continue
-        j = i
-        while j < len(active) and active[j]:
-            j += 1
-        if (j - i) >= min_run:
-            cleaned[i:j] = True
-        i = j
-    active = cleaned
-
-    if not np.any(active):
-        start_t, end_t, duration, mask, _ = detect_active_window(
-            angular_signal_abs, time_s, min_duration_s=0.8
-        )
-        return start_t, end_t, duration, mask
-
-    idx = np.where(active)[0]
-    i0 = int(idx[0])
-    i1 = int(idx[-1])
-    pad = int(0.15 * fs_hz) if np.isfinite(fs_hz) and fs_hz > 0 else 1
-    i0 = max(0, i0 - pad)
-    i1 = min(len(time_s) - 1, i1 + pad)
-
-    start_t = float(time_s[i0])
-    end_t = float(time_s[i1])
-    mask = np.zeros(len(time_s), dtype=bool)
-    mask[i0 : i1 + 1] = True
-    return start_t, end_t, float(end_t - start_t), mask
 
 
 def select_motion_acc_signal(df, prefer_useracc=True):

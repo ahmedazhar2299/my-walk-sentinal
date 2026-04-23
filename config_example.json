@@ -5,38 +5,86 @@
   "prefer_useracc_for_motion": true,
   "min_rows_per_activity": 5,
   "column_candidates": {
-    "timestamp": ["Timestamp", "timestamp", "time", "Time"],
-    "accel_x": ["Accel_X", "accel_x", "acc_x"],
-    "accel_y": ["Accel_Y", "accel_y", "acc_y"],
-    "accel_z": ["Accel_Z", "accel_z", "acc_z"],
-    "useracc_x": ["UserAccel_X", "useracc_x", "linacc_x", "linearacc_x"],
-    "useracc_y": ["UserAccel_Y", "useracc_y", "linacc_y", "linearacc_y"],
-    "useracc_z": ["UserAccel_Z", "useracc_z", "linacc_z", "linearacc_z"],
-    "gyro_x": ["Gyro_X", "gyro_x", "gyr_x"],
-    "gyro_y": ["Gyro_Y", "gyro_y", "gyr_y"],
-    "gyro_z": ["Gyro_Z", "gyro_z", "gyr_z"]
+    "timestamp": [
+      "Timestamp",
+      "timestamp",
+      "time",
+      "Time"
+    ],
+    "accel_x": [
+      "Accel_X",
+      "accel_x",
+      "acc_x"
+    ],
+    "accel_y": [
+      "Accel_Y",
+      "accel_y",
+      "acc_y"
+    ],
+    "accel_z": [
+      "Accel_Z",
+      "accel_z",
+      "acc_z"
+    ],
+    "useracc_x": [
+      "UserAccel_X",
+      "useracc_x",
+      "linacc_x",
+      "linearacc_x"
+    ],
+    "useracc_y": [
+      "UserAccel_Y",
+      "useracc_y",
+      "linacc_y",
+      "linearacc_y"
+    ],
+    "useracc_z": [
+      "UserAccel_Z",
+      "useracc_z",
+      "linacc_z",
+      "linearacc_z"
+    ],
+    "gyro_x": [
+      "Gyro_X",
+      "gyro_x",
+      "gyr_x"
+    ],
+    "gyro_y": [
+      "Gyro_Y",
+      "gyro_y",
+      "gyr_y"
+    ],
+    "gyro_z": [
+      "Gyro_Z",
+      "gyro_z",
+      "gyr_z"
+    ]
   },
   "filtering": {
     "enabled": true,
     "cutoff_hz": 5.0,
     "order": 4
   },
-  "step_detection": {
-    "adaptive_alpha": 0.5
+  "wavelet_steps": {
+    "resample_fs_hz": 10,
+    "walk_min_amp_threshold": 0.3,
+    "min_active_windows": 3,
+    "step_freq_min_hz": 0.8,
+    "step_freq_max_hz": 2.3,
+    "alpha": 0.6,
+    "beta": 2.5,
+    "delta": 20
   },
   "turn_pause": {
     "adaptive_beta": 0.5
   },
-  "adaptive_thresholds": {
-    "quiet_window_sec": 1.0,
-    "min_window_samples": 10,
-    "step_threshold_k": 4.0,
-    "turn_threshold_k": 3.0,
-    "pause_threshold_k": 1.5,
-    "transition_threshold_k": 2.0,
-    "step_threshold_min": 0.05,
-    "turn_threshold_min": 0.05,
-    "pause_threshold_min": 0.02,
-    "transition_threshold_min": 0.03
+  "window_gate": {
+    "window_sec": 1.0,
+    "walk_min_amp_threshold": 0.3,
+    "turn_min_amp_threshold": 0.3,
+    "transition_min_amp_threshold": 0.3,
+    "walk_min_duration_s": 1.0,
+    "turn_min_duration_s": 0.8,
+    "transition_min_duration_s": 0.5
   }
 }
