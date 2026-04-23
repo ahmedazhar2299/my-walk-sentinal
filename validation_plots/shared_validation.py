@@ -12,6 +12,7 @@ from ssqueezepy import ssq_cwt
 from imu_features.config import PipelineConfig
 from imu_features.utils import (
     count_pauses,
+    detect_active_window as core_detect_active_window,
     detect_peaks,
     estimate_sampling_interval_s,
     preprocess_activity_dataframe,
@@ -397,48 +398,14 @@ def _largest_segment(mask):
 
 
 def _detect_active_window(signal, t, min_duration_s=0.8, threshold=None):
-    signal = np.asarray(signal, dtype=float)
-    t = np.asarray(t, dtype=float)
-
-    if len(signal) == 0 or len(t) == 0:
-        return np.nan, np.nan, np.nan, np.zeros(0, dtype=bool), np.nan
-
-    fs_hz = 1.0 / estimate_sampling_interval_s(t) if len(t) > 2 else np.nan
-
-    baseline = np.nanmedian(signal)
-    motion = np.abs(signal - baseline)
-
-    if threshold is None:
-        q70 = np.nanpercentile(motion, 70) if np.isfinite(motion).any() else np.nan
-        q90 = np.nanpercentile(motion, 90) if np.isfinite(motion).any() else np.nan
-        if np.isfinite(q70) and np.isfinite(q90):
-            threshold = q70 + 0.15 * (q90 - q70)
-        else:
-            threshold = np.nan
-
-    if not np.isfinite(threshold):
-        return np.nan, np.nan, np.nan, np.zeros(len(t), dtype=bool), np.nan
-
-    active = np.isfinite(motion) & (motion >= threshold)
-
-    if np.isfinite(fs_hz) and fs_hz > 0:
-        active = _mask_close_gaps(active, max_gap_samples=max(1, int(0.25 * fs_hz)))
-
-    seg = _largest_segment(active)
-    if seg is None:
-        return np.nan, np.nan, np.nan, np.zeros(len(t), dtype=bool), threshold
-
-    i0, i1 = seg
-    start_t = float(t[i0])
-    end_t = float(t[i1])
-    duration = float(end_t - start_t)
-
-    if duration < min_duration_s:
-        return np.nan, np.nan, np.nan, np.zeros(len(t), dtype=bool), threshold
-
-    mask = np.zeros(len(t), dtype=bool)
-    mask[i0:i1 + 1] = True
-    return start_t, end_t, duration, mask, threshold
+    gate_cfg = _apply_notebook_window_gate_settings()
+    return core_detect_active_window(
+        signal=np.asarray(signal, dtype=float),
+        time_s=np.asarray(t, dtype=float),
+        min_duration_s=min_duration_s,
+        threshold=threshold,
+        window_sec=gate_cfg.window_sec,
+    )
 
 
 
@@ -784,7 +751,7 @@ def plot_walk_validation(activity_name, df, meta):
                 ax1.fill_between(env_times[valid_env], env_min[valid_env], env_max[valid_env], step='post', color='crimson', alpha=0.10, label='min-max')
                 ax1.step(env_times, env_mid, where='post', color='crimson', linewidth=2.0, alpha=0.9, label='peak to peak')
         if np.isfinite(min_amp):
-            ax1.axhline(min_amp, color='firebrick', linestyle='--', linewidth=1.6, alpha=0.9, label=f'min_amp={min_amp:.2f}')
+            ax1.axhline(min_amp, color='firebrick', linestyle='--', linewidth=1.6, alpha=0.9, label=f'threshold={min_amp:.2f}')
 
         ax2 = ax1.twinx()
         if len(compare_walk['cad']):
@@ -1000,7 +967,7 @@ def plot_turn_validation(activity_name, df, meta):
                 ax1.fill_between(env_times[valid_env], env_min[valid_env], env_max[valid_env], step='post', color='crimson', alpha=0.10, label='min-max')
                 ax1.step(env_times, env_mid, where='post', color='crimson', linewidth=2.0, alpha=0.9, label='peak to peak')
         if np.isfinite(min_amp):
-            ax1.axhline(min_amp, color='firebrick', linestyle='--', linewidth=1.6, alpha=0.9, label=f'min_amp={min_amp:.2f}')
+            ax1.axhline(min_amp, color='firebrick', linestyle='--', linewidth=1.6, alpha=0.9, label=f'threshold={min_amp:.2f}')
 
         ax2 = ax1.twinx()
         if len(turn_wavelet['cad']):
@@ -1049,6 +1016,8 @@ def plot_turn_validation(activity_name, df, meta):
 
     plt.figure(figsize=(10, 4))
     plt.plot(t, ang, label=f'angular_velocity ({src})')
+    if np.isfinite(turn_threshold):
+        plt.axhline(turn_threshold, color='orange', ls='--', linewidth=1.5, alpha=0.9, label=f'threshold={turn_threshold:.3f}')
     if np.isfinite(start_t):
         plt.axvline(start_t, color='green', ls='--', label='turn start')
     if np.isfinite(end_t):
@@ -1158,7 +1127,10 @@ def plot_transition_validation(activity_name, df, meta):
     t = df['time_s'].to_numpy(dtype=float)
     acc, src = select_motion_acc_signal(df, PIPELINE_CONFIG.prefer_useracc_for_motion)
 
-    start_t, end_t, duration_t, trans_mask, thr = _detect_active_window(acc, t, min_duration_s=0.5)
+    gate_cfg = _apply_notebook_window_gate_settings()
+    start_t, end_t, duration_t, trans_mask, thr = _detect_active_window(
+        acc, t, min_duration_s=gate_cfg.transition_min_duration_s, threshold=gate_cfg.transition_min_amp_threshold
+    )
 
     jerk = safe_gradient(acc, t)
     jerk_mean = float(np.nanmean(np.abs(jerk[trans_mask]))) if np.any(trans_mask) else np.nan
@@ -1170,15 +1142,19 @@ def plot_transition_validation(activity_name, df, meta):
         plt.axvline(start_t, color='green', ls='--', label='start')
     if np.isfinite(end_t):
         plt.axvline(end_t, color='gray', ls='--', label='end')
+    window_starts, window_pp = _window_peak_to_peak_from_signal(t, acc, window_sec=gate_cfg.window_sec)
+    if len(window_starts) and len(window_pp):
+        valid_pp = np.isfinite(window_pp)
+        if np.any(valid_pp):
+            plt.step(window_starts[valid_pp], window_pp[valid_pp], where='post', color='darkorange', linewidth=1.8, alpha=0.95, label='window p2p')
     if np.isfinite(thr):
-        b = np.nanmedian(acc)
-        plt.axhline(b + thr, color='orange', ls='--', alpha=0.8, label='activity threshold')
+        plt.axhline(thr, color='firebrick', ls='--', linewidth=1.6, alpha=0.9, label=f'threshold={thr:.3f}')
     plt.title(f"{activity_name}: Acceleration Profile")
     plt.xlabel('Time (s)')
     plt.ylabel('Acceleration Magnitude')
     plt.grid(alpha=0.3)
     plt.legend(loc='upper right', fontsize=7, framealpha=0.80, borderpad=0.25, labelspacing=0.25, handlelength=1.6)
-    plt.text(0.01, 0.98, f'start={start_t:.3f} | end={end_t:.3f} | duration={duration_t:.2f}s', transform=plt.gca().transAxes, va='top')
+    plt.text(0.01, 0.98, f'start={start_t:.3f} | end={end_t:.3f} | duration={duration_t:.2f}s\nwindow p2p gate={thr:.3f}', transform=plt.gca().transAxes, va='top')
     plt.show()
 
     plt.figure(figsize=(10, 4))
