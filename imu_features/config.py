@@ -28,7 +28,8 @@ class FilterConfig:
 @dataclass
 class WaveletStepConfig:
     resample_fs_hz: int = 10
-    walk_min_amp_threshold: float = 0.3
+    walk_min_amp_threshold: float = 0.3  # fallback only if robust p2p threshold cannot be computed
+    walk_threshold_k: float = 1.0
     min_active_windows: int = 3
     step_freq_min_hz: float = 0.8
     step_freq_max_hz: float = 2.3
@@ -45,10 +46,12 @@ class TurnPauseConfig:
 @dataclass
 class WindowGateConfig:
     window_sec: float = 1.0
-    walk_min_amp_threshold: float = 0.3
+    walk_min_amp_threshold: float = 0.3  # fallback only if robust p2p threshold cannot be computed
+    walk_threshold_k: float = 1.0
     turn_min_amp_threshold: float = 0.3  # fallback only if robust p2p threshold cannot be computed
     turn_threshold_k: float = 1.0
-    transition_min_amp_threshold: float = 0.3
+    transition_min_amp_threshold: float = 0.3  # fallback only if robust p2p threshold cannot be computed
+    transition_threshold_k: float = 1.0
     walk_min_duration_s: float = 1.0
     turn_min_duration_s: float = 0.8
     transition_min_duration_s: float = 0.5

@@ -68,6 +68,7 @@
   "wavelet_steps": {
     "resample_fs_hz": 10,
     "walk_min_amp_threshold": 0.3,
+    "walk_threshold_k": 1.0,
     "min_active_windows": 3,
     "step_freq_min_hz": 0.8,
     "step_freq_max_hz": 2.3,
@@ -81,9 +82,11 @@
   "window_gate": {
     "window_sec": 1.0,
     "walk_min_amp_threshold": 0.3,
+    "walk_threshold_k": 1.0,
     "turn_min_amp_threshold": 0.3,
     "turn_threshold_k": 1.0,
     "transition_min_amp_threshold": 0.3,
+    "transition_threshold_k": 1.0,
     "walk_min_duration_s": 1.0,
     "turn_min_duration_s": 0.8,
     "transition_min_duration_s": 0.5

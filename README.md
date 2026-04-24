@@ -104,6 +104,7 @@ Create `config_override.json`:
   "wavelet_steps": {
     "resample_fs_hz": 10,
     "walk_min_amp_threshold": 0.3,
+    "walk_threshold_k": 1.0,
     "min_active_windows": 3,
     "step_freq_min_hz": 0.8,
     "step_freq_max_hz": 2.3
@@ -114,20 +115,23 @@ Create `config_override.json`:
   "window_gate": {
     "window_sec": 1.0,
     "walk_min_amp_threshold": 0.3,
+    "walk_threshold_k": 1.0,
     "turn_min_amp_threshold": 0.3,
     "turn_threshold_k": 1.0,
-    "transition_min_amp_threshold": 0.3
+    "transition_min_amp_threshold": 0.3,
+    "transition_threshold_k": 1.0
   }
 }
 ```
 
 The pipeline now uses a fixed window gate instead of the old adaptive thresholding path:
 
-- walk activity gate: `max(window) - min(window) >= walk_min_amp_threshold`
-- turn activity gate: `max(window) - min(window) >= turn_min_amp_threshold`
-- transition activity gate: `max(window) - min(window) >= transition_min_amp_threshold`
-- walk step count / cadence: wavelet-based cadence estimate with `wavelet_steps.walk_min_amp_threshold`
-- turn pauses: same `turn_min_amp_threshold` rule, where above threshold means turning and below threshold means pause, plus adaptive pause duration
+- walk activity gate fallback: `max(window) - min(window) >= walk_min_amp_threshold`, but normal walk gating now uses `median(p2p) + walk_threshold_k * MAD(p2p)` over the full signal
+- turn activity gate: `median(p2p) + turn_threshold_k * MAD(p2p)` over the full signal
+- transition activity gate fallback: `max(window) - min(window) >= transition_min_amp_threshold`, but normal transition gating now uses `median(p2p) + transition_threshold_k * MAD(p2p)` over the full signal
+- walk step count / cadence: wavelet-based cadence estimate with a robust threshold `median(p2p) + wavelet_steps.walk_threshold_k * MAD(p2p)`
+- turn wavelet step estimate in notebook: same robust p2p threshold idea as walking
+- turn pauses: same turn threshold rule, where above threshold means turning and below threshold means pause, plus adaptive pause duration
 
 Run:
 

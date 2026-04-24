@@ -285,17 +285,24 @@ def window_peak_to_peak(time_s, signal, window_sec=1.0):
     return np.asarray(starts, dtype=float), np.asarray(pp, dtype=float)
 
 
-def robust_p2p_threshold(time_s, signal, window_sec=1.0, k=1.0, fallback=np.nan):
-    _, pp = window_peak_to_peak(time_s, signal, window_sec=window_sec)
+def p2p_distribution_threshold(pp, k=1.0, fallback=np.nan):
+    pp = np.asarray(pp, dtype=float)
     valid_pp = pp[np.isfinite(pp)]
     if len(valid_pp) == 0:
-        return float(fallback) if np.isfinite(fallback) else np.nan, pp
+        return float(fallback) if np.isfinite(fallback) else np.nan
 
     median_pp = float(np.nanmedian(valid_pp))
     mad_pp = float(np.nanmedian(np.abs(valid_pp - median_pp)))
     threshold = median_pp + float(k) * mad_pp
+    threshold = min(threshold, 0.3 * float(np.nanmax(valid_pp)))
     if not np.isfinite(threshold):
         threshold = float(fallback) if np.isfinite(fallback) else np.nan
+    return float(threshold)
+
+
+def robust_p2p_threshold(time_s, signal, window_sec=1.0, k=1.0, fallback=np.nan):
+    _, pp = window_peak_to_peak(time_s, signal, window_sec=window_sec)
+    threshold = p2p_distribution_threshold(pp, k=k, fallback=fallback)
     return float(threshold), pp
 
 
@@ -478,13 +485,14 @@ def _wavelet_find_continuous_peaks(valid_peaks, min_t, delta):
 
 def wavelet_step_summary(time_s, signal, wavelet_config, fixed_window=False):
     compare_fs = int(wavelet_config.resample_fs_hz)
-    min_amp = float(
+    fallback_min_amp = float(
         getattr(
             wavelet_config,
             "walk_min_amp_threshold",
             getattr(wavelet_config, "min_amp_threshold", 0.3),
         )
     )
+    threshold_k = float(getattr(wavelet_config, "walk_threshold_k", 1.0))
     min_t = int(wavelet_config.min_active_windows)
     step_freq = (
         float(wavelet_config.step_freq_min_hz),
@@ -499,7 +507,7 @@ def wavelet_step_summary(time_s, signal, wavelet_config, fixed_window=False):
             "cad": np.array([]),
             "dominant_freq_hz": np.array([]),
             "pp": np.array([]),
-            "min_amp": min_amp,
+            "min_amp": fallback_min_amp,
             "active_mask": np.array([], dtype=bool),
             "start_time_s": np.nan,
             "end_time_s": np.nan,
@@ -509,6 +517,7 @@ def wavelet_step_summary(time_s, signal, wavelet_config, fixed_window=False):
         }
 
     pp = np.ptp(signal_bout.reshape((compare_fs, -1), order="F"), axis=0)
+    min_amp = p2p_distribution_threshold(pp, k=threshold_k, fallback=fallback_min_amp)
     valid = np.ones(len(pp), dtype=bool)
     valid[pp < min_amp] = False
     cad = np.zeros(len(pp), dtype=float)
@@ -708,11 +717,12 @@ def detect_active_window(signal, time_s, min_duration_s=0.8, threshold=None, win
         return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), min_amp
 
     active_windows = np.isfinite(pp) & (pp >= min_amp)
-    seg = largest_true_segment(active_windows)
-    if seg is None:
+    active_idx = np.where(active_windows)[0]
+    if len(active_idx) == 0:
         return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), min_amp
 
-    w0, w1 = seg
+    w0 = int(active_idx[0])
+    w1 = int(active_idx[-1])
     start_t = float(starts[w0])
     end_t = float(min(time_s[-1], starts[w1] + window_sec))
     duration = float(end_t - start_t)

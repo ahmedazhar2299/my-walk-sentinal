@@ -6,6 +6,7 @@ from .utils import (
     SignalMeta,
     build_nan_feature_dict,
     detect_active_window,
+    robust_p2p_threshold,
     dominant_frequency,
     rms,
     select_motion_acc_signal,
@@ -79,11 +80,18 @@ def extract_walk_features(df, meta, config):
     if np.isfinite(start_t) and np.isfinite(end_t):
         walk_mask = (time_s >= start_t) & (time_s <= end_t)
     else:
+        walk_threshold, _ = robust_p2p_threshold(
+            time_s=time_s,
+            signal=acc_signal,
+            window_sec=config.window_gate.window_sec,
+            k=config.window_gate.walk_threshold_k,
+            fallback=config.window_gate.walk_min_amp_threshold,
+        )
         start_t, end_t, duration, walk_mask, _ = detect_active_window(
             acc_signal,
             time_s,
             min_duration_s=config.window_gate.walk_min_duration_s,
-            threshold=config.window_gate.walk_min_amp_threshold,
+            threshold=walk_threshold,
             window_sec=config.window_gate.window_sec,
         )
 

@@ -6,6 +6,7 @@ from .utils import (
     SignalMeta,
     build_nan_feature_dict,
     detect_active_window,
+    robust_p2p_threshold,
     detect_peaks,
     rms,
     safe_gradient,
@@ -43,11 +44,18 @@ def extract_transition_features(df, meta, config, prefix):
     acc_signal, _ = select_motion_acc_signal(df, config.prefer_useracc_for_motion)
     gyro_signal = df["gyro_mag"].to_numpy(dtype=float)
 
+    transition_threshold, _ = robust_p2p_threshold(
+        time_s=time_s,
+        signal=acc_signal,
+        window_sec=config.window_gate.window_sec,
+        k=config.window_gate.transition_threshold_k,
+        fallback=config.window_gate.transition_min_amp_threshold,
+    )
     start_t, end_t, duration, transition_mask, _ = detect_active_window(
         signal=acc_signal,
         time_s=time_s,
         min_duration_s=config.window_gate.transition_min_duration_s,
-        threshold=config.window_gate.transition_min_amp_threshold,
+        threshold=transition_threshold,
         window_sec=config.window_gate.window_sec,
     )
     out[f"{prefix}_duration"] = duration

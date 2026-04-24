@@ -16,6 +16,8 @@ from imu_features.utils import (
     detect_peaks,
     estimate_sampling_interval_s,
     robust_p2p_threshold,
+    p2p_distribution_threshold,
+    window_peak_to_peak,
     preprocess_activity_dataframe,
     safe_gradient,
     select_motion_acc_signal,
@@ -33,13 +35,23 @@ def default_plot_params():
         "walk_variance_window_sec": 0.50,
         "walk_compare_fs_hz": 10,
         "walk_compare_min_amp": 0.30,
+        "walk_compare_threshold_k": 1.0,
         "walk_compare_min_t_sec": 2.0,
         "walk_compare_step_freq_hz": (0.8, 2.3),
+        "walk_compare_window_sec": 1.0,
+        "turn_compare_fs_hz": 10,
+        "turn_compare_min_amp": 0.20,
+        "turn_compare_threshold_k": 1.0,
+        "turn_compare_min_t_sec": 3.0,
+        "turn_compare_step_freq_hz": (0.8, 2.3),
+        "turn_compare_window_sec": 1.0,
         "window_gate": {
             "window_sec": 1.0,
             "walk_min_amp_threshold": 0.30,
+            "walk_threshold_k": 1.0,
             "turn_min_amp_threshold": 0.10,
             "transition_min_amp_threshold": 0.30,
+            "transition_threshold_k": 1.0,
         },
     }
 
@@ -508,12 +520,18 @@ def _compare_preprocess_bout(t_bout, vm_bout, fs=10):
     return t_interp, vm_interp
 
 
-def _compare_get_pp(vm_bout, fs=10):
+def _compare_get_pp(vm_bout, fs=10, window_sec=1.0):
     vm_bout = np.asarray(vm_bout, dtype=float)
-    if len(vm_bout) < fs:
-        return np.array([])
-    vm_res_sec = vm_bout.reshape((fs, -1), order='F')
-    return np.ptp(vm_res_sec, axis=0)
+    if fs <= 0 or not np.isfinite(window_sec) or window_sec <= 0:
+        return np.array([], dtype=float)
+    window_n = max(1, int(round(fs * window_sec)))
+    if len(vm_bout) < window_n:
+        return np.array([], dtype=float)
+    vm_bout = vm_bout[: (len(vm_bout) // window_n) * window_n]
+    if len(vm_bout) == 0:
+        return np.array([], dtype=float)
+    vm_res = vm_bout.reshape((window_n, -1), order='F')
+    return np.ptp(vm_res, axis=0)
 
 
 def _compare_compute_interpolate_cwt(tapered_bout, fs=10):
@@ -536,17 +554,18 @@ def _compare_compute_interpolate_cwt(tapered_bout, fs=10):
     return freqs_interp, coefs_interp
 
 
-def _compare_identify_peaks_in_cwt(freqs_interp, coefs_interp, fs=10, step_freq=(1.4, 2.3), alpha=0.6, beta=2.5):
+def _compare_identify_peaks_in_cwt(freqs_interp, coefs_interp, fs=10, window_sec=1.0, step_freq=(1.4, 2.3), alpha=0.6, beta=2.5):
     if coefs_interp.size == 0:
         return np.array([[]])
     num_rows, num_cols = coefs_interp.shape
-    num_cols2 = int(num_cols / fs)
+    window_n = max(1, int(round(fs * window_sec)))
+    num_cols2 = int(num_cols / window_n)
     dp = np.zeros((num_rows, num_cols2))
     loc_min = np.argmin(np.abs(freqs_interp - step_freq[0]))
     loc_max = np.argmin(np.abs(freqs_interp - step_freq[1]))
     for i in range(num_cols2):
-        x_start = i * fs
-        x_end = (i + 1) * fs
+        x_start = i * window_n
+        x_end = (i + 1) * window_n
         window = np.sum(coefs_interp[:, np.arange(x_start, x_end)], axis=1)
         locs = detect_peaks(window, fs_hz=np.nan, min_distance_s=np.nan, height=None)
         locs = np.asarray(locs, dtype=int)
@@ -628,29 +647,45 @@ def _compare_find_continuous_dominant_peaks(valid_peaks, min_t=3, delta=20):
     return cont_peaks[:, :num_cols]
 
 
-def exact_compare_walk_summary(t, acc, fs_hz):
-    compare_fs = int(PLOT_PARAMS.get('walk_compare_fs_hz', 10))
-    min_amp = float(PLOT_PARAMS.get('walk_compare_min_amp', 0.30))
-    min_t = int(PLOT_PARAMS.get('walk_compare_min_t_sec', 3))
-    step_freq = PLOT_PARAMS.get('walk_compare_step_freq_hz', (0.8, 2.3))
+def _compare_params(prefix):
+    return {
+        "compare_fs": int(PLOT_PARAMS.get(f"{prefix}_fs_hz", 10)),
+        "fallback_min_amp": float(PLOT_PARAMS.get(f"{prefix}_min_amp", 0.30)),
+        "threshold_k": float(PLOT_PARAMS.get(f"{prefix}_threshold_k", 1.0)),
+        "min_t_sec": float(PLOT_PARAMS.get(f"{prefix}_min_t_sec", 2.0)),
+        "step_freq": PLOT_PARAMS.get(f"{prefix}_step_freq_hz", (0.8, 2.3)),
+        "window_sec": float(PLOT_PARAMS.get(f"{prefix}_window_sec", 1.0)),
+    }
+
+
+def exact_compare_walk_summary(t, acc, fs_hz, prefix='walk_compare'):
+    params = _compare_params(prefix)
+    compare_fs = params["compare_fs"]
+    fallback_min_amp = params["fallback_min_amp"]
+    threshold_k = params["threshold_k"]
+    min_t_sec = params["min_t_sec"]
+    step_freq = params["step_freq"]
+    window_sec = params["window_sec"]
+    min_t = max(1, int(round(min_t_sec / max(window_sec, 1e-9))))
     alpha = 0.6
     beta = 2.5
     delta = 20
 
     t_res, vm_bout = _compare_preprocess_bout(t, acc, fs=compare_fs)
-    if len(vm_bout) < compare_fs:
-        return {'t_res': np.array([]), 'vm_bout': np.array([]), 'cad': np.array([]), 'dominant_freq_hz': np.array([]), 'pp': np.array([]), 'min_amp': min_amp, 'walk_mask': np.array([], dtype=bool), 'start_time_s': np.nan, 'end_time_s': np.nan, 'duration_s': np.nan, 'step_count': np.nan, 'cadence': np.nan}
+    if len(vm_bout) < max(1, int(round(compare_fs * window_sec))):
+        return {'t_res': np.array([]), 'vm_bout': np.array([]), 'cad': np.array([]), 'dominant_freq_hz': np.array([]), 'pp': np.array([]), 'min_amp': fallback_min_amp, 'walk_mask': np.array([], dtype=bool), 'start_time_s': np.nan, 'end_time_s': np.nan, 'duration_s': np.nan, 'step_count': np.nan, 'cadence': np.nan, 'window_sec': window_sec}
 
-    pp = _compare_get_pp(vm_bout, compare_fs)
+    pp = _compare_get_pp(vm_bout, compare_fs, window_sec=window_sec)
+    min_amp = p2p_distribution_threshold(pp, k=threshold_k, fallback=fallback_min_amp)
     valid = np.ones(len(pp), dtype=bool)
     valid[pp < min_amp] = False
     cad = np.zeros(len(pp), dtype=float)
     dominant_freq_hz = np.full(len(pp), np.nan, dtype=float)
     if np.sum(valid) >= min_t:
-        tapered_bout = vm_bout[np.repeat(valid, compare_fs)]
+        tapered_bout = vm_bout[np.repeat(valid, max(1, int(round(compare_fs * window_sec))))]
         freqs_interp, coefs_interp = _compare_compute_interpolate_cwt(tapered_bout, fs=compare_fs)
         if coefs_interp.size:
-            dp = _compare_identify_peaks_in_cwt(freqs_interp, coefs_interp, compare_fs, step_freq, alpha, beta)
+            dp = _compare_identify_peaks_in_cwt(freqs_interp, coefs_interp, compare_fs, window_sec=window_sec, step_freq=step_freq, alpha=alpha, beta=beta)
             valid_peaks = np.zeros((dp.shape[0], len(valid)))
             valid_peaks[:, valid] = dp
             cont_peaks = _compare_find_continuous_dominant_peaks(valid_peaks, min_t=min_t, delta=delta)
@@ -661,41 +696,47 @@ def exact_compare_walk_summary(t, acc, fs_hz):
                     cad[i] = freqs_interp[ind_freqs[0]]
     walk_sec = cad > 0
     if not np.any(walk_sec):
-        return {'t_res': t_res, 'vm_bout': vm_bout, 'cad': cad, 'dominant_freq_hz': dominant_freq_hz, 'pp': pp, 'min_amp': min_amp, 'walk_mask': walk_sec, 'start_time_s': np.nan, 'end_time_s': np.nan, 'duration_s': np.nan, 'step_count': 0.0, 'cadence': np.nan}
+        return {'t_res': t_res, 'vm_bout': vm_bout, 'cad': cad, 'dominant_freq_hz': dominant_freq_hz, 'pp': pp, 'min_amp': min_amp, 'walk_mask': walk_sec, 'start_time_s': np.nan, 'end_time_s': np.nan, 'duration_s': np.nan, 'step_count': 0.0, 'cadence': np.nan, 'window_sec': window_sec}
+    window_n = max(1, int(round(compare_fs * window_sec)))
     first_sec = np.where(walk_sec)[0][0]
     last_sec = np.where(walk_sec)[0][-1]
-    start_time = float(t_res[first_sec * compare_fs])
-    end_idx = min(len(t_res) - 1, (last_sec + 1) * compare_fs - 1)
+    start_time = float(t_res[first_sec * window_n])
+    end_idx = min(len(t_res) - 1, (last_sec + 1) * window_n - 1)
     end_time = float(t_res[end_idx])
     duration = float(end_time - start_time)
-    step_count = float(np.nansum(cad[walk_sec]))
+    step_count = float(np.nansum(cad[walk_sec]) * window_sec)
     cadence = float(np.nanmean(cad[walk_sec]) * 60.0) if np.any(walk_sec) else np.nan
-    return {'t_res': t_res, 'vm_bout': vm_bout, 'cad': cad, 'dominant_freq_hz': dominant_freq_hz, 'pp': pp, 'min_amp': min_amp, 'walk_mask': walk_sec, 'start_time_s': start_time, 'end_time_s': end_time, 'duration_s': duration, 'step_count': step_count, 'cadence': cadence}
+    return {'t_res': t_res, 'vm_bout': vm_bout, 'cad': cad, 'dominant_freq_hz': dominant_freq_hz, 'pp': pp, 'min_amp': min_amp, 'walk_mask': walk_sec, 'start_time_s': start_time, 'end_time_s': end_time, 'duration_s': duration, 'step_count': step_count, 'cadence': cadence, 'window_sec': window_sec}
 
 
-def exact_compare_fixed_window_summary(t, acc, fs_hz):
-    compare_fs = int(PLOT_PARAMS.get('walk_compare_fs_hz', 10))
-    min_amp = float(PLOT_PARAMS.get('walk_compare_min_amp', 0.30))
-    min_t = int(PLOT_PARAMS.get('walk_compare_min_t_sec', 3))
-    step_freq = PLOT_PARAMS.get('walk_compare_step_freq_hz', (0.8, 2.3))
+def exact_compare_fixed_window_summary(t, acc, fs_hz, prefix='turn_compare'):
+    params = _compare_params(prefix)
+    compare_fs = params["compare_fs"]
+    fallback_min_amp = params["fallback_min_amp"]
+    threshold_k = params["threshold_k"]
+    min_t_sec = params["min_t_sec"]
+    step_freq = params["step_freq"]
+    window_sec = params["window_sec"]
+    min_t = max(1, int(round(min_t_sec / max(window_sec, 1e-9))))
     alpha = 0.6
     beta = 2.5
     delta = 20
 
     t_res, vm_bout = _compare_preprocess_bout(t, acc, fs=compare_fs)
-    if len(vm_bout) < compare_fs:
-        return {'t_res': np.array([]), 'vm_bout': np.array([]), 'cad': np.array([]), 'dominant_freq_hz': np.array([]), 'pp': np.array([]), 'min_amp': min_amp, 'walk_mask': np.array([], dtype=bool), 'start_time_s': np.nan, 'end_time_s': np.nan, 'duration_s': np.nan, 'step_count': np.nan, 'cadence': np.nan}
+    if len(vm_bout) < max(1, int(round(compare_fs * window_sec))):
+        return {'t_res': np.array([]), 'vm_bout': np.array([]), 'cad': np.array([]), 'dominant_freq_hz': np.array([]), 'pp': np.array([]), 'min_amp': fallback_min_amp, 'walk_mask': np.array([], dtype=bool), 'start_time_s': np.nan, 'end_time_s': np.nan, 'duration_s': np.nan, 'step_count': np.nan, 'cadence': np.nan, 'window_sec': window_sec}
 
-    pp = _compare_get_pp(vm_bout, compare_fs)
+    pp = _compare_get_pp(vm_bout, compare_fs, window_sec=window_sec)
+    min_amp = p2p_distribution_threshold(pp, k=threshold_k, fallback=fallback_min_amp)
     valid = np.ones(len(pp), dtype=bool)
     valid[pp < min_amp] = False
     cad = np.zeros(len(pp), dtype=float)
     dominant_freq_hz = np.full(len(pp), np.nan, dtype=float)
     if np.sum(valid) >= min_t:
-        tapered_bout = vm_bout[np.repeat(valid, compare_fs)]
+        tapered_bout = vm_bout[np.repeat(valid, max(1, int(round(compare_fs * window_sec))))]
         freqs_interp, coefs_interp = _compare_compute_interpolate_cwt(tapered_bout, fs=compare_fs)
         if coefs_interp.size:
-            dp = _compare_identify_peaks_in_cwt(freqs_interp, coefs_interp, compare_fs, step_freq, alpha, beta)
+            dp = _compare_identify_peaks_in_cwt(freqs_interp, coefs_interp, compare_fs, window_sec=window_sec, step_freq=step_freq, alpha=alpha, beta=beta)
             valid_peaks = np.zeros((dp.shape[0], len(valid)))
             valid_peaks[:, valid] = dp
             cont_peaks = _compare_find_continuous_dominant_peaks(valid_peaks, min_t=min_t, delta=delta)
@@ -709,21 +750,22 @@ def exact_compare_fixed_window_summary(t, acc, fs_hz):
     start_time = float(t[0]) if len(t) else np.nan
     end_time = float(t[-1]) if len(t) else np.nan
     duration = float(end_time - start_time) if np.isfinite(start_time) and np.isfinite(end_time) else np.nan
-    step_count = float(np.nansum(cad[active_sec])) if np.any(active_sec) else 0.0
+    step_count = float(np.nansum(cad[active_sec]) * window_sec) if np.any(active_sec) else 0.0
     cadence = float((step_count / duration) * 60.0) if np.isfinite(duration) and duration > 0 else np.nan
-    return {'t_res': t_res, 'vm_bout': vm_bout, 'cad': cad, 'dominant_freq_hz': dominant_freq_hz, 'pp': pp, 'min_amp': min_amp, 'walk_mask': active_sec, 'start_time_s': start_time, 'end_time_s': end_time, 'duration_s': duration, 'step_count': step_count, 'cadence': cadence}
+    return {'t_res': t_res, 'vm_bout': vm_bout, 'cad': cad, 'dominant_freq_hz': dominant_freq_hz, 'pp': pp, 'min_amp': min_amp, 'walk_mask': active_sec, 'start_time_s': start_time, 'end_time_s': end_time, 'duration_s': duration, 'step_count': step_count, 'cadence': cadence, 'window_sec': window_sec}
 
 
 def _turn_thresholds(ang, t, meta):
     gate_cfg = _apply_notebook_window_gate_settings()
-    turn_threshold, pp = robust_p2p_threshold(
+    pp_starts, pp = window_peak_to_peak(t, ang, window_sec=gate_cfg.window_sec)
+    turn_threshold, _ = robust_p2p_threshold(
         time_s=t,
         signal=ang,
         window_sec=gate_cfg.window_sec,
         k=getattr(gate_cfg, 'turn_threshold_k', 1.0),
         fallback=gate_cfg.turn_min_amp_threshold,
     )
-    return float(turn_threshold), float(turn_threshold), pp
+    return float(turn_threshold), float(turn_threshold), pp_starts, pp
 
 
 
@@ -766,7 +808,8 @@ def plot_walk_validation(activity_name, df, meta):
 
         ax2 = ax1.twinx()
         if len(compare_walk['cad']):
-            sec_times = compare_walk['t_res'][::int(PLOT_PARAMS.get('walk_compare_fs_hz', 10))][:len(compare_walk['cad'])]
+            walk_window_n = max(1, int(round(int(PLOT_PARAMS.get('walk_compare_fs_hz', 10)) * float(PLOT_PARAMS.get('walk_compare_window_sec', 1.0)))))
+            sec_times = compare_walk['t_res'][::walk_window_n][:len(compare_walk['cad'])]
             cad = np.asarray(compare_walk['cad'], dtype=float)
             if len(sec_times) == len(cad):
                 ax2.step(sec_times, cad, where='post', color='darkorange', linewidth=2.0, label='cadence (steps/s)')
@@ -788,7 +831,8 @@ def plot_walk_validation(activity_name, df, meta):
         plt.show()
 
         if len(compare_walk['cad']):
-            sec_times = compare_walk['t_res'][::int(PLOT_PARAMS.get('walk_compare_fs_hz', 10))][:len(compare_walk['cad'])]
+            walk_window_n = max(1, int(round(int(PLOT_PARAMS.get('walk_compare_fs_hz', 10)) * float(PLOT_PARAMS.get('walk_compare_window_sec', 1.0)))))
+            sec_times = compare_walk['t_res'][::walk_window_n][:len(compare_walk['cad'])]
             freq_hz = np.asarray(compare_walk.get('dominant_freq_hz', []), dtype=float)
             plt.figure(figsize=(10, 3.8))
             if len(sec_times) == len(freq_hz):
@@ -904,7 +948,7 @@ def plot_turn_validation(activity_name, df, meta):
         ang_raw, src = select_turn_angular_signal(df, PIPELINE_CONFIG, meta.fs_hz)
     ang = np.abs(ang_raw)
 
-    turn_threshold, pause_threshold, turn_pp = _turn_thresholds(ang, t, meta)
+    turn_threshold, pause_threshold, turn_pp_starts, turn_pp = _turn_thresholds(ang, t, meta)
     start_t, end_t, duration_t, turn_mask = _turn_window_from_threshold(ang, t, turn_threshold)
 
     acc, acc_src = select_motion_acc_signal(df, PIPELINE_CONFIG.prefer_useracc_for_motion)
@@ -926,7 +970,7 @@ def plot_turn_validation(activity_name, df, meta):
         acc_turn = acc[idx]
         t_turn = t[idx]
         fs_turn = (1.0 / estimate_sampling_interval_s(t_turn)) if len(t_turn) > 2 else meta.fs_hz
-        turn_wavelet = exact_compare_fixed_window_summary(t_turn, acc_turn, fs_turn)
+        turn_wavelet = exact_compare_fixed_window_summary(t_turn, acc_turn, fs_turn, prefix='turn_compare')
 
     step_count_turn = float(turn_wavelet.get('step_count', np.nan)) if len(t_turn) else np.nan
 
@@ -942,7 +986,7 @@ def plot_turn_validation(activity_name, df, meta):
         ax1.set_ylabel('Acceleration Magnitude')
         ax1.grid(alpha=0.3)
 
-        env_times, env_min, env_max, env_mid = _window_signal_envelope(t_turn, acc_turn, window_sec=1.0)
+        env_times, env_min, env_max, env_mid = _window_signal_envelope(t_turn, acc_turn, window_sec=float(PLOT_PARAMS.get('turn_compare_window_sec', 1.0)))
         min_amp = float(turn_wavelet.get('min_amp', np.nan))
         if len(env_times) == len(env_mid):
             valid_env = np.isfinite(env_min) & np.isfinite(env_max)
@@ -954,7 +998,8 @@ def plot_turn_validation(activity_name, df, meta):
 
         ax2 = ax1.twinx()
         if len(turn_wavelet['cad']):
-            sec_times = turn_wavelet['t_res'][::int(PLOT_PARAMS.get('walk_compare_fs_hz', 10))][:len(turn_wavelet['cad'])]
+            turn_window_n = max(1, int(round(int(PLOT_PARAMS.get('turn_compare_fs_hz', 10)) * float(PLOT_PARAMS.get('turn_compare_window_sec', 1.0)))))
+            sec_times = turn_wavelet['t_res'][::turn_window_n][:len(turn_wavelet['cad'])]
             cad = np.asarray(turn_wavelet['cad'], dtype=float)
             if len(sec_times) == len(cad):
                 if np.isfinite(turn_wavelet['end_time_s']) and len(sec_times):
@@ -984,7 +1029,7 @@ def plot_turn_validation(activity_name, df, meta):
         ax1.text(
             0.01,
             0.90,
-            f"wavelet start={turn_wavelet['start_time_s']:.3f}s | wavelet end={turn_wavelet['end_time_s']:.2f}s | duration={turn_wavelet['duration_s']:.2f}s\nwavelet steps≈{turn_wavelet['step_count']:.1f}",
+            f"wavelet start={turn_wavelet['start_time_s']:.3f}s | wavelet end={turn_wavelet['end_time_s']:.2f}s | duration={turn_wavelet['duration_s']:.2f}s\nsteps≈{turn_wavelet['step_count']:.1f}",
             transform=ax1.transAxes,
             va='top',
             ha='left',
@@ -1005,6 +1050,8 @@ def plot_turn_validation(activity_name, df, meta):
         ang,
         window_sec=PIPELINE_CONFIG.window_gate.window_sec,
     )
+    if len(turn_pp_starts) == len(env_mid):
+        env_times = turn_pp_starts
     if len(env_times) == len(env_mid):
         valid_env = np.isfinite(env_min) & np.isfinite(env_max)
         if np.any(valid_env):
@@ -1019,7 +1066,7 @@ def plot_turn_validation(activity_name, df, meta):
             )
 
     if len(turn_pp):
-        pp_times = t[0] + np.arange(len(turn_pp), dtype=float) * PIPELINE_CONFIG.window_gate.window_sec
+        pp_times = np.asarray(turn_pp_starts, dtype=float)
         valid_pp = np.isfinite(turn_pp)
         if np.any(valid_pp):
             plt.step(
@@ -1050,7 +1097,7 @@ def plot_turn_validation(activity_name, df, meta):
     plt.ylabel('Angular Velocity (abs)')
     plt.grid(alpha=0.3)
     plt.legend(loc='upper right', fontsize=7, framealpha=0.80, borderpad=0.25, labelspacing=0.25, handlelength=1.6)
-    plt.text(0.01, 0.98, f"start={start_t:.3f} | end={end_t:.3f} | duration={duration_t:.2f}s | wavelet_steps={step_count_turn:.1f} | turn_thr={turn_threshold:.3f}", transform=plt.gca().transAxes, va='top')
+    plt.text(0.01, 0.98, f"start={start_t:.3f} | end={end_t:.3f} | duration={duration_t:.2f}s | steps={step_count_turn:.1f} | turn_thr={turn_threshold:.3f}", transform=plt.gca().transAxes, va='top')
     plt.show()
 
     plt.figure(figsize=(10, 4))
@@ -1150,8 +1197,15 @@ def plot_transition_validation(activity_name, df, meta):
     acc, src = select_motion_acc_signal(df, PIPELINE_CONFIG.prefer_useracc_for_motion)
 
     gate_cfg = _apply_notebook_window_gate_settings()
+    thr, _ = robust_p2p_threshold(
+        time_s=t,
+        signal=acc,
+        window_sec=gate_cfg.window_sec,
+        k=getattr(gate_cfg, 'transition_threshold_k', 1.0),
+        fallback=gate_cfg.transition_min_amp_threshold,
+    )
     start_t, end_t, duration_t, trans_mask, thr = _detect_active_window(
-        acc, t, min_duration_s=gate_cfg.transition_min_duration_s, threshold=gate_cfg.transition_min_amp_threshold
+        acc, t, min_duration_s=gate_cfg.transition_min_duration_s, threshold=thr
     )
 
     jerk = safe_gradient(acc, t)
@@ -1176,7 +1230,7 @@ def plot_transition_validation(activity_name, df, meta):
     plt.ylabel('Acceleration Magnitude')
     plt.grid(alpha=0.3)
     plt.legend(loc='upper right', fontsize=7, framealpha=0.80, borderpad=0.25, labelspacing=0.25, handlelength=1.6)
-    plt.text(0.01, 0.98, f'start={start_t:.3f} | end={end_t:.3f} | duration={duration_t:.2f}s\nwindow p2p gate={thr:.3f}', transform=plt.gca().transAxes, va='top')
+    plt.text(0.01, 0.98, f'start={start_t:.3f} | end={end_t:.3f} | duration={duration_t:.2f}s\nwindow threshold={thr:.3f}', transform=plt.gca().transAxes, va='top')
     plt.show()
 
     plt.figure(figsize=(10, 4))
