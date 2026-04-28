@@ -53,6 +53,60 @@ def _transition_window(time_s, signal, config):
     )
 
 
+def _median_mad_threshold(values, k, fallback=np.nan):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if len(values) == 0:
+        return float(fallback) if np.isfinite(fallback) else np.nan
+    median = float(np.nanmedian(values))
+    mad = float(np.nanmedian(np.abs(values - median)))
+    threshold = median + float(k) * mad
+    max_value = float(np.nanmax(values))
+    if np.isfinite(max_value) and max_value > 0:
+        threshold = min(threshold, 0.3 * max_value)
+    if not np.isfinite(threshold):
+        threshold = float(fallback) if np.isfinite(fallback) else np.nan
+    return float(threshold)
+
+
+def _refine_window_from_abs_signal(time_s, signal, broad_mask, config):
+    time_s = np.asarray(time_s, dtype=float)
+    signal = np.asarray(signal, dtype=float)
+    broad_mask = np.asarray(broad_mask, dtype=bool)
+    if len(time_s) == 0 or len(signal) != len(time_s):
+        return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), np.nan
+
+    if not np.any(broad_mask):
+        broad_mask = np.isfinite(signal) & np.isfinite(time_s)
+    abs_signal = np.abs(signal)
+    threshold = _median_mad_threshold(
+        abs_signal[broad_mask],
+        k=config.window_gate.transition_threshold_k,
+        fallback=config.window_gate.transition_min_amp_threshold,
+    )
+    active_mask = broad_mask & np.isfinite(abs_signal) & np.isfinite(threshold) & (abs_signal >= threshold)
+    if not np.any(active_mask):
+        active_mask = broad_mask & np.isfinite(signal)
+
+    active_idx = np.where(active_mask)[0]
+    if len(active_idx) == 0:
+        return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), threshold
+
+    start_t = float(time_s[int(active_idx[0])])
+    end_t = float(time_s[int(active_idx[-1])])
+    duration = float(end_t - start_t)
+    if not np.isfinite(duration) or duration < config.window_gate.transition_min_duration_s:
+        broad_idx = np.where(broad_mask & np.isfinite(signal))[0]
+        if len(broad_idx) == 0:
+            return np.nan, np.nan, np.nan, np.zeros(len(time_s), dtype=bool), threshold
+        start_t = float(time_s[int(broad_idx[0])])
+        end_t = float(time_s[int(broad_idx[-1])])
+        duration = float(end_t - start_t)
+
+    refined_mask = (time_s >= start_t) & (time_s <= end_t) & np.isfinite(signal)
+    return start_t, end_t, duration, refined_mask, threshold
+
+
 def _dominant_gyro_axis(df, mask):
     best_axis = None
     best_range = -np.inf
@@ -108,11 +162,18 @@ def transition_flexion_extension_peaks(df, meta, config):
         return empty
 
     gyro_signal = df[axis].to_numpy(dtype=float)
-    start_t = prelim_start_t
-    end_t = prelim_end_t
-    duration = prelim_duration
-    transition_mask = prelim_mask
-    threshold = prelim_threshold
+    start_t, end_t, duration, transition_mask, threshold = _refine_window_from_abs_signal(
+        time_s,
+        gyro_signal,
+        prelim_mask,
+        config,
+    )
+    if not np.isfinite(start_t) or not np.isfinite(end_t):
+        start_t = prelim_start_t
+        end_t = prelim_end_t
+        duration = prelim_duration
+        transition_mask = prelim_mask
+        threshold = prelim_threshold
     if np.any(transition_mask):
         gyro_for_peaks = gyro_signal[transition_mask]
         time_for_peaks = time_s[transition_mask]

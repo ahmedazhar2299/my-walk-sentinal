@@ -1195,12 +1195,12 @@ def plot_turn_pair_xcorr(left_data, right_data):
 
 def plot_transition_validation(activity_name, df, meta):
     t = df['time_s'].to_numpy(dtype=float)
+    gate_cfg = _apply_notebook_window_gate_settings()
     flex_ext = transition_flexion_extension_peaks(df, meta, PIPELINE_CONFIG)
     gyro = flex_ext["gyro_signal"]
     src = flex_ext["gyro_axis"] or "selected gyro axis"
     acc, _ = select_motion_acc_signal(df, PIPELINE_CONFIG.prefer_useracc_for_motion)
 
-    gate_cfg = _apply_notebook_window_gate_settings()
     start_t = flex_ext["start_time_s"]
     end_t = flex_ext["end_time_s"]
     duration_t = flex_ext["duration_s"]
@@ -1236,31 +1236,9 @@ def plot_transition_validation(activity_name, df, meta):
                 alpha=0.10,
                 label='min-max',
             )
-    window_starts, window_pp = _window_peak_to_peak_from_signal(t, gyro, window_sec=gate_cfg.window_sec)
-    if len(window_starts) and len(window_pp):
-        valid_pp = np.isfinite(window_pp)
-        if np.any(valid_pp):
-            plt.step(
-                window_starts[valid_pp],
-                window_pp[valid_pp],
-                where='post',
-                color='crimson',
-                linewidth=2.0,
-                alpha=0.9,
-                label='peak to peak',
-            )
-            active_pp = valid_pp & np.isfinite(thr) & (window_pp >= thr)
-            plt.scatter(
-                window_starts[active_pp] if np.any(active_pp) else window_starts[valid_pp],
-                window_pp[active_pp] if np.any(active_pp) else window_pp[valid_pp],
-                color='crimson',
-                s=26,
-                zorder=5,
-                label='active p2p windows' if np.any(active_pp) else 'p2p windows',
-            )
     if np.isfinite(thr):
-        plt.axhline(thr, color='firebrick', ls='--', linewidth=1.6, alpha=0.9, label=f'threshold={thr:.3f}')
-        plt.axhline(-thr, color='firebrick', ls='--', linewidth=1.1, alpha=0.55)
+        plt.axhline(thr, color='firebrick', ls='--', linewidth=1.6, alpha=0.9, label=f'+abs threshold={thr:.3f}')
+        plt.axhline(-thr, color='firebrick', ls='--', linewidth=1.6, alpha=0.9, label=f'-abs threshold={-thr:.3f}')
     if np.isfinite(flex_ext["flexion_peak"]) and np.isfinite(flex_ext["flexion_peak_time_s"]):
         plt.scatter(
             flex_ext["flexion_peak_time_s"],
