@@ -10,6 +10,7 @@ from scipy.signal.windows import tukey
 from ssqueezepy import ssq_cwt
 
 from imu_features.config import PipelineConfig
+from imu_features.transition_features import transition_flexion_extension_peaks
 from imu_features.utils import (
     count_pauses,
     detect_active_window as core_detect_active_window,
@@ -1194,43 +1195,115 @@ def plot_turn_pair_xcorr(left_data, right_data):
 
 def plot_transition_validation(activity_name, df, meta):
     t = df['time_s'].to_numpy(dtype=float)
-    acc, src = select_motion_acc_signal(df, PIPELINE_CONFIG.prefer_useracc_for_motion)
+    flex_ext = transition_flexion_extension_peaks(df, meta, PIPELINE_CONFIG)
+    gyro = flex_ext["gyro_signal"]
+    src = flex_ext["gyro_axis"] or "selected gyro axis"
+    acc, _ = select_motion_acc_signal(df, PIPELINE_CONFIG.prefer_useracc_for_motion)
 
     gate_cfg = _apply_notebook_window_gate_settings()
-    thr, _ = robust_p2p_threshold(
-        time_s=t,
-        signal=acc,
-        window_sec=gate_cfg.window_sec,
-        k=getattr(gate_cfg, 'transition_threshold_k', 1.0),
-        fallback=gate_cfg.transition_min_amp_threshold,
-    )
-    start_t, end_t, duration_t, trans_mask, thr = _detect_active_window(
-        acc, t, min_duration_s=gate_cfg.transition_min_duration_s, threshold=thr
-    )
+    start_t = flex_ext["start_time_s"]
+    end_t = flex_ext["end_time_s"]
+    duration_t = flex_ext["duration_s"]
+    trans_mask = flex_ext["transition_mask"]
+    thr = flex_ext["threshold"]
 
     jerk = safe_gradient(acc, t)
     jerk_mean = float(np.nanmean(np.abs(jerk[trans_mask]))) if np.any(trans_mask) else np.nan
     jerk_std = float(np.nanstd(jerk[trans_mask])) if np.any(trans_mask) else np.nan
 
     plt.figure(figsize=(10, 4))
-    plt.plot(t, acc, label=f'acc ({src})')
+    if len(gyro):
+        plt.plot(t, gyro, color='steelblue', linewidth=1.5, label=f'{src} angular velocity')
     if np.isfinite(start_t):
         plt.axvline(start_t, color='green', ls='--', label='start')
     if np.isfinite(end_t):
         plt.axvline(end_t, color='gray', ls='--', label='end')
-    window_starts, window_pp = _window_peak_to_peak_from_signal(t, acc, window_sec=gate_cfg.window_sec)
+    plt.axhline(0, color='black', linewidth=1.0, alpha=0.45)
+    env_times, env_min, env_max, env_mid = _window_signal_envelope(
+        t,
+        gyro,
+        window_sec=gate_cfg.window_sec,
+    )
+    if len(env_times) == len(env_mid):
+        valid_env = np.isfinite(env_min) & np.isfinite(env_max)
+        if np.any(valid_env):
+            plt.fill_between(
+                env_times[valid_env],
+                env_min[valid_env],
+                env_max[valid_env],
+                step='post',
+                color='crimson',
+                alpha=0.10,
+                label='min-max',
+            )
+    window_starts, window_pp = _window_peak_to_peak_from_signal(t, gyro, window_sec=gate_cfg.window_sec)
     if len(window_starts) and len(window_pp):
         valid_pp = np.isfinite(window_pp)
         if np.any(valid_pp):
-            plt.step(window_starts[valid_pp], window_pp[valid_pp], where='post', color='darkorange', linewidth=1.8, alpha=0.95, label='window p2p')
+            plt.step(
+                window_starts[valid_pp],
+                window_pp[valid_pp],
+                where='post',
+                color='crimson',
+                linewidth=2.0,
+                alpha=0.9,
+                label='peak to peak',
+            )
+            active_pp = valid_pp & np.isfinite(thr) & (window_pp >= thr)
+            plt.scatter(
+                window_starts[active_pp] if np.any(active_pp) else window_starts[valid_pp],
+                window_pp[active_pp] if np.any(active_pp) else window_pp[valid_pp],
+                color='crimson',
+                s=26,
+                zorder=5,
+                label='active p2p windows' if np.any(active_pp) else 'p2p windows',
+            )
     if np.isfinite(thr):
         plt.axhline(thr, color='firebrick', ls='--', linewidth=1.6, alpha=0.9, label=f'threshold={thr:.3f}')
-    plt.title(f"{activity_name}: Acceleration Profile")
+        plt.axhline(-thr, color='firebrick', ls='--', linewidth=1.1, alpha=0.55)
+    if np.isfinite(flex_ext["flexion_peak"]) and np.isfinite(flex_ext["flexion_peak_time_s"]):
+        plt.scatter(
+            flex_ext["flexion_peak_time_s"],
+            flex_ext["flexion_peak"],
+            color='crimson',
+            s=70,
+            zorder=6,
+            label='flexion peak',
+        )
+        plt.annotate(
+            f'flexion={flex_ext["flexion_peak"]:.3f}',
+            (flex_ext["flexion_peak_time_s"], flex_ext["flexion_peak"]),
+            textcoords='offset points',
+            xytext=(8, 8),
+        )
+    if np.isfinite(flex_ext["extension_peak"]) and np.isfinite(flex_ext["extension_peak_time_s"]):
+        plt.scatter(
+            flex_ext["extension_peak_time_s"],
+            flex_ext["extension_peak"],
+            color='royalblue',
+            s=70,
+            zorder=6,
+            label='extension peak',
+        )
+        plt.annotate(
+            f'extension={flex_ext["extension_peak"]:.3f}',
+            (flex_ext["extension_peak_time_s"], flex_ext["extension_peak"]),
+            textcoords='offset points',
+            xytext=(8, -14),
+        )
+    plt.title(f"{activity_name}: Duration, Flexion, and Extension")
     plt.xlabel('Time (s)')
-    plt.ylabel('Acceleration Magnitude')
+    plt.ylabel('Angular Velocity')
     plt.grid(alpha=0.3)
     plt.legend(loc='upper right', fontsize=7, framealpha=0.80, borderpad=0.25, labelspacing=0.25, handlelength=1.6)
-    plt.text(0.01, 0.98, f'start={start_t:.3f} | end={end_t:.3f} | duration={duration_t:.2f}s\nwindow threshold={thr:.3f}', transform=plt.gca().transAxes, va='top')
+    plt.text(
+        0.01,
+        0.98,
+        f'start={start_t:.3f} | end={end_t:.3f} | duration={duration_t:.2f}s\n'
+        f'flexion={flex_ext["flexion_peak"]:.3f} | extension={flex_ext["extension_peak"]:.3f}',
+        transform=plt.gca().transAxes,
+        va='top',
+    )
     plt.show()
 
     plt.figure(figsize=(10, 4))
@@ -1252,8 +1325,10 @@ def plot_transition_validation(activity_name, df, meta):
         'start_time_s': start_t,
         'end_time_s': end_t,
         'duration_s': duration_t,
+        'flexion_peak': flex_ext.get('flexion_peak', np.nan),
+        'extension_peak': flex_ext.get('extension_peak', np.nan),
     }
-    return summary, {'time': t, 'signal': acc, 'summary': summary, 'fs_hz': meta.fs_hz}
+    return summary, {'time': t, 'signal': gyro, 'summary': summary, 'fs_hz': meta.fs_hz}
 
 
 def plot_transition_pair_xcorr(sit_stand_data, stand_sit_data):
@@ -1280,4 +1355,3 @@ def plot_transition_pair_xcorr(sit_stand_data, stand_sit_data):
         'xcorr_peak': peak,
         'xcorr_peak_lag_s': lag_s,
     }
-

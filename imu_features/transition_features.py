@@ -18,6 +18,8 @@ TRANSITION_SUFFIXES = [
     "duration",
     "time_to_peak_acc",
     "peak_acc",
+    "flexion_peak",
+    "extension_peak",
     "peak_gyro",
     "acc_rms",
     "jerk_mean",
@@ -27,10 +29,124 @@ TRANSITION_SUFFIXES = [
 ]
 
 DEFAULT_TRANSITION_MIN_DISTANCE_S = 0.15
+GYRO_AXIS_COLUMNS = ("gyro_x", "gyro_y", "gyro_z")
 
 
 def transition_feature_names(prefix):
     return [f"{prefix}_{suffix}" for suffix in TRANSITION_SUFFIXES]
+
+
+def _transition_window(time_s, signal, config):
+    transition_threshold, _ = robust_p2p_threshold(
+        time_s=time_s,
+        signal=signal,
+        window_sec=config.window_gate.window_sec,
+        k=config.window_gate.transition_threshold_k,
+        fallback=config.window_gate.transition_min_amp_threshold,
+    )
+    return detect_active_window(
+        signal=signal,
+        time_s=time_s,
+        min_duration_s=config.window_gate.transition_min_duration_s,
+        threshold=transition_threshold,
+        window_sec=config.window_gate.window_sec,
+    )
+
+
+def _dominant_gyro_axis(df, mask):
+    best_axis = None
+    best_range = -np.inf
+    for axis in GYRO_AXIS_COLUMNS:
+        if axis not in df.columns:
+            continue
+        values = df[axis].to_numpy(dtype=float)
+        values = values[mask] if np.any(mask) else values
+        if not np.isfinite(values).any():
+            continue
+        axis_range = float(np.nanmax(values) - np.nanmin(values))
+        if axis_range > best_range:
+            best_axis = axis
+            best_range = axis_range
+    return best_axis
+
+
+def transition_flexion_extension_peaks(df, meta, config):
+    """Return flexion/extension peak details from the dominant signed gyro axis."""
+    empty = {
+        "start_time_s": np.nan,
+        "end_time_s": np.nan,
+        "duration_s": np.nan,
+        "threshold": np.nan,
+        "gyro_axis": None,
+        "time_s": np.array([], dtype=float),
+        "gyro_signal": np.array([], dtype=float),
+        "transition_mask": np.array([], dtype=bool),
+        "flexion_peak": np.nan,
+        "flexion_peak_time_s": np.nan,
+        "extension_peak": np.nan,
+        "extension_peak_time_s": np.nan,
+    }
+    if df is None or meta is None or len(df) < config.min_rows_per_activity:
+        return empty
+
+    time_s = df["time_s"].to_numpy(dtype=float)
+    gyro_mag = df["gyro_mag"].to_numpy(dtype=float)
+    prelim_start_t, prelim_end_t, prelim_duration, prelim_mask, prelim_threshold = _transition_window(
+        time_s,
+        gyro_mag,
+        config,
+    )
+    axis = _dominant_gyro_axis(df, prelim_mask)
+    if axis is None:
+        empty.update({
+            "start_time_s": prelim_start_t,
+            "end_time_s": prelim_end_t,
+            "duration_s": prelim_duration,
+            "threshold": prelim_threshold,
+            "transition_mask": prelim_mask,
+        })
+        return empty
+
+    gyro_signal = df[axis].to_numpy(dtype=float)
+    start_t = prelim_start_t
+    end_t = prelim_end_t
+    duration = prelim_duration
+    transition_mask = prelim_mask
+    threshold = prelim_threshold
+    if np.any(transition_mask):
+        gyro_for_peaks = gyro_signal[transition_mask]
+        time_for_peaks = time_s[transition_mask]
+    else:
+        gyro_for_peaks = gyro_signal
+        time_for_peaks = time_s
+
+    details = {
+        "start_time_s": start_t,
+        "end_time_s": end_t,
+        "duration_s": duration,
+        "threshold": threshold,
+        "gyro_axis": axis,
+        "time_s": time_s,
+        "gyro_signal": gyro_signal,
+        "transition_mask": transition_mask,
+    }
+    if np.isfinite(gyro_for_peaks).any():
+        flex_idx = int(np.nanargmax(gyro_for_peaks))
+        ext_idx = int(np.nanargmin(gyro_for_peaks))
+        details.update({
+            "flexion_peak": float(gyro_for_peaks[flex_idx]),
+            "flexion_peak_time_s": float(time_for_peaks[flex_idx]),
+            "extension_peak": float(gyro_for_peaks[ext_idx]),
+            "extension_peak_time_s": float(time_for_peaks[ext_idx]),
+        })
+    else:
+        details.update({
+            "flexion_peak": np.nan,
+            "flexion_peak_time_s": np.nan,
+            "extension_peak": np.nan,
+            "extension_peak_time_s": np.nan,
+        })
+    return details
 
 
 def extract_transition_features(df, meta, config, prefix):
@@ -44,20 +160,9 @@ def extract_transition_features(df, meta, config, prefix):
     acc_signal, _ = select_motion_acc_signal(df, config.prefer_useracc_for_motion)
     gyro_signal = df["gyro_mag"].to_numpy(dtype=float)
 
-    transition_threshold, _ = robust_p2p_threshold(
-        time_s=time_s,
-        signal=acc_signal,
-        window_sec=config.window_gate.window_sec,
-        k=config.window_gate.transition_threshold_k,
-        fallback=config.window_gate.transition_min_amp_threshold,
-    )
-    start_t, end_t, duration, transition_mask, _ = detect_active_window(
-        signal=acc_signal,
-        time_s=time_s,
-        min_duration_s=config.window_gate.transition_min_duration_s,
-        threshold=transition_threshold,
-        window_sec=config.window_gate.window_sec,
-    )
+    flex_ext = transition_flexion_extension_peaks(df, meta, config)
+    duration = flex_ext.get("duration_s", np.nan)
+    transition_mask = flex_ext.get("transition_mask", np.zeros(len(df), dtype=bool))
     out[f"{prefix}_duration"] = duration
     if np.any(transition_mask):
         acc_for_stats = acc_signal[transition_mask]
@@ -73,6 +178,8 @@ def extract_transition_features(df, meta, config, prefix):
         out[f"{prefix}_time_to_peak_acc"] = float(time_for_stats[peak_idx] - time_for_stats[0])
         out[f"{prefix}_peak_acc"] = float(acc_for_stats[peak_idx])
 
+    out[f"{prefix}_flexion_peak"] = flex_ext.get("flexion_peak", np.nan)
+    out[f"{prefix}_extension_peak"] = flex_ext.get("extension_peak", np.nan)
     out[f"{prefix}_peak_gyro"] = float(np.nanmax(gyro_for_stats))
     out[f"{prefix}_acc_rms"] = rms(acc_for_stats)
 
