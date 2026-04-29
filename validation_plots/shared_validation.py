@@ -272,7 +272,7 @@ def _window_signal_envelope(t, signal, window_sec=1.0):
     return np.asarray(starts, dtype=float), np.asarray(mins, dtype=float), np.asarray(maxs, dtype=float), np.asarray(mids, dtype=float)
 
 
-def _resample_signal_to_n(time_s, signal, n_points=100):
+def _resample_signal_to_n(time_s, signal, n_points=101):
     time_s = np.asarray(time_s, dtype=float)
     signal = np.asarray(signal, dtype=float)
     if len(time_s) < 3 or len(signal) < 3 or n_points < 3:
@@ -298,6 +298,14 @@ def _resample_signal_to_n(time_s, signal, n_points=100):
     return resampled_t, resampled_x
 
 
+def _resample_signal_to_cycle_percent(time_s, signal, n_cycle_points=101):
+    _, resampled_x = _resample_signal_to_n(time_s, signal, n_points=n_cycle_points)
+    if len(resampled_x) == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+    cycle_percent = np.linspace(0.0, 100.0, len(resampled_x))
+    return cycle_percent, resampled_x
+
+
 def _normalize_signal(signal):
     signal = np.asarray(signal, dtype=float)
     if len(signal) < 3:
@@ -312,7 +320,7 @@ def _normalize_signal(signal):
     return signal / std
 
 
-def _windowed_resampled_pair(data_a, data_b, n_points=100):
+def _cycle_normalized_pair(data_a, data_b, n_cycle_points=101):
     ta, xa = _window_signal(
         data_a['time'], data_a['signal'],
         data_a['summary']['start_time_s'], data_a['summary']['end_time_s']
@@ -322,20 +330,26 @@ def _windowed_resampled_pair(data_a, data_b, n_points=100):
         data_b['summary']['start_time_s'], data_b['summary']['end_time_s']
     )
     if len(ta) < 3 or len(tb) < 3:
-        return np.array([]), np.array([]), np.nan
+        return np.array([]), np.array([]), np.array([]), np.nan
 
-    ta_r, xa_r = _resample_signal_to_n(ta, xa, n_points=n_points)
-    tb_r, xb_r = _resample_signal_to_n(tb, xb, n_points=n_points)
+    cycle_percent, xa_r = _resample_signal_to_cycle_percent(ta, xa, n_cycle_points=n_cycle_points)
+    _, xb_r = _resample_signal_to_cycle_percent(tb, xb, n_cycle_points=n_cycle_points)
     xa_n = _normalize_signal(xa_r)
     xb_n = _normalize_signal(xb_r)
     if len(xa_n) < 3 or len(xb_n) < 3:
-        return np.array([]), np.array([]), np.nan
+        return np.array([]), np.array([]), np.array([]), np.nan
 
-    duration_a = float(data_a['summary']['end_time_s'] - data_a['summary']['start_time_s'])
-    duration_b = float(data_b['summary']['end_time_s'] - data_b['summary']['start_time_s'])
-    mean_duration = np.nanmean([duration_a, duration_b])
-    lag_step_s = (mean_duration / (n_points - 1)) if np.isfinite(mean_duration) and mean_duration > 0 else np.nan
-    return xa_n, xb_n, lag_step_s
+    cycle_step_percent = 100.0 / (n_cycle_points - 1) if n_cycle_points > 1 else np.nan
+    return cycle_percent, xa_n, xb_n, cycle_step_percent
+
+
+def _windowed_resampled_pair(data_a, data_b, n_points=101):
+    _, xa_n, xb_n, cycle_step_percent = _cycle_normalized_pair(
+        data_a,
+        data_b,
+        n_cycle_points=n_points,
+    )
+    return xa_n, xb_n, cycle_step_percent
 
 
 def _normalized_xcorr(x, y):
@@ -359,16 +373,17 @@ def _normalized_xcorr(x, y):
     return lags, corr
 
 
-def _best_xcorr_summary(data_a, data_b, n_points=100):
-    x, y, lag_step_s = _windowed_resampled_pair(data_a, data_b, n_points=n_points)
+def _best_xcorr_summary(data_a, data_b, n_points=101):
+    x, y, lag_step_percent = _windowed_resampled_pair(data_a, data_b, n_points=n_points)
     lags, corr = _normalized_xcorr(x, y)
     if len(corr) == 0:
-        return lags, corr, np.nan, np.nan, lag_step_s
+        return lags, corr, np.nan, np.nan, np.nan
 
     i = int(np.argmax(np.abs(corr)))
     peak = float(corr[i])
-    lag_s = float(lags[i] * lag_step_s) if np.isfinite(lag_step_s) else np.nan
-    return lags, corr, peak, lag_s, lag_step_s
+    symmetry_score = float(abs(peak))
+    lag_percent = float(lags[i] * lag_step_percent) if np.isfinite(lag_step_percent) else np.nan
+    return lags, corr, peak, symmetry_score, lag_percent
 
 
 def _mask_close_gaps(mask, max_gap_samples):
@@ -1168,28 +1183,37 @@ def plot_turn_symmetry_comparison(left_data, right_data):
 
 
 def plot_turn_pair_xcorr(left_data, right_data):
-    lags, corr, peak, lag_s, lag_step_s = _best_xcorr_summary(left_data, right_data, n_points=100)
+    lags, corr, peak, symmetry_score, lag_percent = _best_xcorr_summary(
+        left_data,
+        right_data,
+        n_points=101,
+    )
 
     plt.figure(figsize=(10, 4))
     if len(corr):
-        lags_x = lags * lag_step_s if np.isfinite(lag_step_s) else lags
-        xlabel = 'Lag (s)' if np.isfinite(lag_step_s) else 'Lag (samples)'
+        lag_step_percent = 100.0 / 100.0
+        lags_x = lags * lag_step_percent
         plt.plot(lags_x, corr, label='normalized cross-correlation')
-        if np.isfinite(lag_s):
-            plt.axvline(lag_s, color='orange', ls='--', label=f'peak lag={lag_s:.3f}s')
-        plt.xlabel(xlabel)
+        plt.xlabel('Cycle shift (% of movement cycle)')
     else:
-        plt.xlabel('Lag')
-    plt.title('Left vs Right Turn: Normalized Cross-Correlation')
+        plt.xlabel('Cycle shift (% of movement cycle)')
+    plt.title('Left vs Right Turn: Cycle-Normalized Cross-Correlation')
     plt.ylabel('Correlation')
     plt.grid(alpha=0.3)
     plt.legend(loc='upper right', fontsize=7, framealpha=0.80, borderpad=0.25, labelspacing=0.25, handlelength=1.6)
+    plt.text(
+        0.01,
+        0.98,
+        f'symmetry score={symmetry_score:.3f} | peak correlation={peak:.3f}',
+        transform=plt.gca().transAxes,
+        va='top',
+    )
     plt.show()
 
     return {
         'activity': 'turn_left_right_xcorr',
-        'xcorr_peak': peak,
-        'xcorr_peak_lag_s': lag_s,
+        'xcorr_symmetry_score': symmetry_score,
+        'xcorr_peak_correlation': peak,
     }
 
 
@@ -1310,26 +1334,35 @@ def plot_transition_validation(activity_name, df, meta):
 
 
 def plot_transition_pair_xcorr(sit_stand_data, stand_sit_data):
-    lags, corr, peak, lag_s, lag_step_s = _best_xcorr_summary(sit_stand_data, stand_sit_data, n_points=100)
+    lags, corr, peak, symmetry_score, lag_percent = _best_xcorr_summary(
+        sit_stand_data,
+        stand_sit_data,
+        n_points=101,
+    )
 
     plt.figure(figsize=(10, 4))
     if len(corr):
-        lags_x = lags * lag_step_s if np.isfinite(lag_step_s) else lags
-        xlabel = 'Lag (s)' if np.isfinite(lag_step_s) else 'Lag (samples)'
+        lag_step_percent = 100.0 / 100.0
+        lags_x = lags * lag_step_percent
         plt.plot(lags_x, corr, label='normalized cross-correlation')
-        if np.isfinite(lag_s):
-            plt.axvline(lag_s, color='orange', ls='--', label=f'peak lag={lag_s:.3f}s')
-        plt.xlabel(xlabel)
+        plt.xlabel('Cycle shift (% of movement cycle)')
     else:
-        plt.xlabel('Lag')
-    plt.title('Sit-to-Stand vs Stand-to-Sit: Normalized Cross-Correlation')
+        plt.xlabel('Cycle shift (% of movement cycle)')
+    plt.title('Sit-to-Stand vs Stand-to-Sit: Cycle-Normalized Cross-Correlation')
     plt.ylabel('Correlation')
     plt.grid(alpha=0.3)
     plt.legend(loc='upper right', fontsize=7, framealpha=0.80, borderpad=0.25, labelspacing=0.25, handlelength=1.6)
+    plt.text(
+        0.01,
+        0.98,
+        f'symmetry score={symmetry_score:.3f} | peak correlation={peak:.3f}',
+        transform=plt.gca().transAxes,
+        va='top',
+    )
     plt.show()
 
     return {
         'activity': 'sitstand_standsit_xcorr',
-        'xcorr_peak': peak,
-        'xcorr_peak_lag_s': lag_s,
+        'xcorr_symmetry_score': symmetry_score,
+        'xcorr_peak_correlation': peak,
     }
