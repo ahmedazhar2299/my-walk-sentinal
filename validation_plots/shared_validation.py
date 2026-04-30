@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy import interpolate
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import find_peaks
 from scipy.signal.windows import tukey
 from ssqueezepy import ssq_cwt
 
@@ -957,76 +959,75 @@ def _turn_window_from_threshold(ang, t, threshold):
 def plot_turn_validation(activity_name, df, meta):
     t = df['time_s'].to_numpy(dtype=float)
 
-    if 'gyro_z' in df and np.isfinite(df['gyro_z']).any():
-        ang_raw = df['gyro_z'].to_numpy(dtype=float)
-        src = 'gyro_z'
-    else:
-        ang_raw, src = select_turn_angular_signal(df, PIPELINE_CONFIG, meta.fs_hz)
-    ang = np.abs(ang_raw)
+    ang, src = select_turn_angular_signal(df, PIPELINE_CONFIG, meta.fs_hz)
 
     turn_threshold, pause_threshold, turn_pp_starts, turn_pp = _turn_thresholds(ang, t, meta)
     start_t, end_t, duration_t, turn_mask = _turn_window_from_threshold(ang, t, turn_threshold)
 
-    acc, acc_src = select_motion_acc_signal(df, PIPELINE_CONFIG.prefer_useracc_for_motion)
+    if 'useracc_mag' in df and np.isfinite(df['useracc_mag'].to_numpy(dtype=float)).any():
+        acc_src = 'useracc_mag'
+        acc = df[acc_src].to_numpy(dtype=float)
+    elif 'acc_mag' in df and np.isfinite(df['acc_mag'].to_numpy(dtype=float)).any():
+        acc_src = 'acc_mag'
+        acc = df[acc_src].to_numpy(dtype=float)
+    else:
+        acc_src = 'useracc_mag'
+        acc = np.full(len(df), np.nan, dtype=float)
     acc_turn = np.array([], dtype=float)
     t_turn = np.array([], dtype=float)
-    turn_wavelet = {
-        't_res': np.array([]),
-        'cad': np.array([]),
-        'dominant_freq_hz': np.array([]),
-        'start_time_s': np.nan,
-        'end_time_s': np.nan,
-        'duration_s': np.nan,
-        'step_count': np.nan,
-        'cadence': np.nan,
-        'min_amp': float(PLOT_PARAMS.get('walk_compare_min_amp', 0.30)),
-    }
+    acc_turn_smooth = np.array([], dtype=float)
+    turn_peak_indices = np.array([], dtype=int)
+    turn_peak_threshold = np.nan
+    turn_peak_distance = np.nan
+    fs_turn = meta.fs_hz
     if np.any(turn_mask):
         idx = np.where(turn_mask)[0]
         acc_turn = acc[idx]
         t_turn = t[idx]
         fs_turn = (1.0 / estimate_sampling_interval_s(t_turn)) if len(t_turn) > 2 else meta.fs_hz
-        turn_wavelet = exact_compare_fixed_window_summary(t_turn, acc_turn, fs_turn, prefix='turn_compare')
+        if len(acc_turn) >= 3 and np.isfinite(fs_turn) and fs_turn > 0:
+            acc_turn_smooth = gaussian_filter1d(acc_turn, sigma=1)
+            turn_compare_k = float(PLOT_PARAMS.get('turn_compare_threshold_k', 1.0))
+            turn_peak_threshold = turn_compare_k * float(np.nanmean(acc_turn_smooth))
+            turn_peak_distance = max(1, int(0.2 * fs_turn))
+            turn_peak_indices, _ = find_peaks(
+                acc_turn_smooth,
+                height=turn_peak_threshold,
+                distance=turn_peak_distance,
+            )
 
-    step_count_turn = float(turn_wavelet.get('step_count', np.nan)) if len(t_turn) else np.nan
+    step_count_turn = float(len(turn_peak_indices)) if len(t_turn) else np.nan
 
-    if len(turn_wavelet['t_res']):
+    if len(t_turn) and len(acc_turn_smooth):
         fig, ax1 = plt.subplots(figsize=(10, 4))
-        ax1.plot(t_turn, acc_turn, color='steelblue', linewidth=1.5, label='signal')
-        if np.isfinite(turn_wavelet['start_time_s']):
-            ax1.axvline(turn_wavelet['start_time_s'], color='green', ls='--', linewidth=1.5, label='start')
-        if np.isfinite(turn_wavelet['end_time_s']):
-            ax1.axvline(turn_wavelet['end_time_s'], color='gray', ls='--', linewidth=1.5, label='end')
-        ax1.set_title(f"{activity_name}: Wavelet Turn Step Estimate")
+        ax1.plot(t_turn, acc_turn, color='lightsteelblue', linewidth=1.0, alpha=0.8, label=acc_src)
+        ax1.plot(t_turn, acc_turn_smooth, color='steelblue', linewidth=1.8, label=f'smoothed {acc_src}')
+        if np.isfinite(start_t):
+            ax1.axvline(start_t, color='green', ls='--', linewidth=1.5, label='turn start')
+        if np.isfinite(end_t):
+            ax1.axvline(end_t, color='gray', ls='--', linewidth=1.5, label='turn end')
+        if np.isfinite(turn_peak_threshold):
+            ax1.axhline(
+                turn_peak_threshold,
+                color='firebrick',
+                linestyle='--',
+                linewidth=1.6,
+                alpha=0.9,
+                label=f'K*mean threshold={turn_peak_threshold:.3f}',
+            )
+        if len(turn_peak_indices):
+            ax1.scatter(
+                t_turn[turn_peak_indices],
+                acc_turn_smooth[turn_peak_indices],
+                color='crimson',
+                s=45,
+                zorder=5,
+                label=f'peaks={len(turn_peak_indices)}',
+            )
+        ax1.set_title(f"{activity_name}: find_peaks Turn Step Estimate")
         ax1.set_xlabel('Time (s)')
         ax1.set_ylabel('Acceleration Magnitude')
         ax1.grid(alpha=0.3)
-
-        env_times, env_min, env_max, env_mid = _window_signal_envelope(t_turn, acc_turn, window_sec=float(PLOT_PARAMS.get('turn_compare_window_sec', 1.0)))
-        min_amp = float(turn_wavelet.get('min_amp', np.nan))
-        if len(env_times) == len(env_mid):
-            valid_env = np.isfinite(env_min) & np.isfinite(env_max)
-            if np.any(valid_env):
-                ax1.fill_between(env_times[valid_env], env_min[valid_env], env_max[valid_env], step='post', color='crimson', alpha=0.10, label='min-max')
-                ax1.step(env_times, env_mid, where='post', color='crimson', linewidth=2.0, alpha=0.9, label='peak to peak')
-        if np.isfinite(min_amp):
-            ax1.axhline(min_amp, color='firebrick', linestyle='--', linewidth=1.6, alpha=0.9, label=f'threshold={min_amp:.2f}')
-
-        ax2 = ax1.twinx()
-        if len(turn_wavelet['cad']):
-            turn_window_n = max(1, int(round(int(PLOT_PARAMS.get('turn_compare_fs_hz', 10)) * float(PLOT_PARAMS.get('turn_compare_window_sec', 1.0)))))
-            sec_times = turn_wavelet['t_res'][::turn_window_n][:len(turn_wavelet['cad'])]
-            cad = np.asarray(turn_wavelet['cad'], dtype=float)
-            if len(sec_times) == len(cad):
-                if np.isfinite(turn_wavelet['end_time_s']) and len(sec_times):
-                    sec_times_plot = np.append(sec_times, float(turn_wavelet['end_time_s']))
-                    cad_plot = np.append(cad, cad[-1])
-                else:
-                    sec_times_plot = sec_times
-                    cad_plot = cad
-                ax2.step(sec_times_plot, cad_plot, where='post', color='darkorange', linewidth=2.0, label='_nolegend_')
-        ax2.set_ylabel('Cadence (steps/s)')
-
         turn_leg = ax1.legend(
             loc='upper right',
             bbox_to_anchor=(0.995, 0.995),
@@ -1045,7 +1046,8 @@ def plot_turn_validation(activity_name, df, meta):
         ax1.text(
             0.01,
             0.90,
-            f"wavelet start={turn_wavelet['start_time_s']:.3f}s | wavelet end={turn_wavelet['end_time_s']:.2f}s | duration={turn_wavelet['duration_s']:.2f}s\nsteps≈{turn_wavelet['step_count']:.1f}",
+            f"turn start={start_t:.3f}s | turn end={end_t:.2f}s | duration={duration_t:.2f}s\n"
+            f"find_peaks steps={len(turn_peak_indices)} | K={turn_compare_k:.2f} | distance={turn_peak_distance / fs_turn:.2f}s",
             transform=ax1.transAxes,
             va='top',
             ha='left',
