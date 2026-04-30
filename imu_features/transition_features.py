@@ -174,12 +174,35 @@ def transition_flexion_extension_peaks(df, meta, config):
         duration = prelim_duration
         transition_mask = prelim_mask
         threshold = prelim_threshold
-    if np.any(transition_mask):
-        gyro_for_peaks = gyro_signal[transition_mask]
-        time_for_peaks = time_s[transition_mask]
-    else:
-        gyro_for_peaks = gyro_signal
-        time_for_peaks = time_s
+
+    peak_search_mask = transition_mask & np.isfinite(gyro_signal)
+    if np.isfinite(start_t):
+        peak_search_mask &= time_s >= start_t
+    if not np.any(peak_search_mask):
+        peak_search_mask = prelim_mask & np.isfinite(gyro_signal)
+    if not np.any(peak_search_mask):
+        peak_search_mask = np.isfinite(gyro_signal)
+
+    peak_idx = np.where(peak_search_mask)[0]
+    flex_global_idx = None
+    ext_global_idx = None
+    if len(peak_idx):
+        gyro_for_peaks = gyro_signal[peak_idx]
+        if np.isfinite(gyro_for_peaks).any():
+            flex_global_idx = int(peak_idx[int(np.nanargmax(gyro_for_peaks))])
+            ext_global_idx = int(peak_idx[int(np.nanargmin(gyro_for_peaks))])
+
+    if flex_global_idx is not None and ext_global_idx is not None and np.isfinite(threshold):
+        last_motion_peak_idx = max(flex_global_idx, ext_global_idx)
+        search_idx = peak_idx[peak_idx > last_motion_peak_idx]
+        below_idx = search_idx[
+            np.isfinite(gyro_signal[search_idx]) & (np.abs(gyro_signal[search_idx]) < threshold)
+        ]
+        if len(below_idx):
+            end_idx = int(below_idx[0])
+            end_t = float(time_s[end_idx])
+            duration = float(end_t - start_t) if np.isfinite(start_t) else np.nan
+            transition_mask = (time_s >= start_t) & (time_s <= end_t) & np.isfinite(gyro_signal)
 
     details = {
         "start_time_s": start_t,
@@ -191,14 +214,12 @@ def transition_flexion_extension_peaks(df, meta, config):
         "gyro_signal": gyro_signal,
         "transition_mask": transition_mask,
     }
-    if np.isfinite(gyro_for_peaks).any():
-        flex_idx = int(np.nanargmax(gyro_for_peaks))
-        ext_idx = int(np.nanargmin(gyro_for_peaks))
+    if flex_global_idx is not None and ext_global_idx is not None:
         details.update({
-            "flexion_peak": float(gyro_for_peaks[flex_idx]),
-            "flexion_peak_time_s": float(time_for_peaks[flex_idx]),
-            "extension_peak": float(gyro_for_peaks[ext_idx]),
-            "extension_peak_time_s": float(time_for_peaks[ext_idx]),
+            "flexion_peak": float(gyro_signal[flex_global_idx]),
+            "flexion_peak_time_s": float(time_s[flex_global_idx]),
+            "extension_peak": float(gyro_signal[ext_global_idx]),
+            "extension_peak_time_s": float(time_s[ext_global_idx]),
         })
     else:
         details.update({
