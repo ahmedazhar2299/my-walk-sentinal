@@ -831,9 +831,46 @@ def read_and_preprocess_csv(csv_path, config):
 
 
 def resolve_activity_files(date_dir):
-    """Resolve activity files using strict exact filenames only."""
+    """Resolve activity files from flat or nested patient/date folders."""
+    aliases = {
+        "walk": ("walk", "10_mw"),
+        "left_turn": ("left_turn", "360_leftturn"),
+        "right_turn": ("right_turn", "360_rightturn"),
+        "sit_to_stand": ("sit_to_stand", "sit_stand"),
+        "stand_to_sit": ("stand_to_sit", "stand_sit"),
+    }
+
+    def normalize(value):
+        text = str(value).lower()
+        chars = [ch if ch.isalnum() else "_" for ch in text]
+        normalized = "_".join("".join(chars).split("_"))
+        return f"_{normalized}_"
+
+    csv_files = sorted(Path(date_dir).rglob("*.csv"))
     resolved = {}
     for activity in ACTIVITY_ORDER:
-        expected_path = date_dir / f"{activity}.csv"
-        resolved[activity] = expected_path if expected_path.is_file() else None
+        expected_path = Path(date_dir) / f"{activity}.csv"
+        if expected_path.is_file():
+            resolved[activity] = expected_path
+            continue
+
+        best = None
+        best_score = -1
+        for path in csv_files:
+            normalized_name = normalize(path.stem)
+            normalized_rel = normalize(path.relative_to(date_dir))
+            if not any(f"_{alias}_" in normalized_rel for alias in aliases.get(activity, (activity,))):
+                continue
+
+            score = 0
+            if "synchronized" in normalized_rel:
+                score += 20
+            if any(f"_{alias}_" == normalized_name for alias in aliases.get(activity, (activity,))):
+                score += 10
+            if activity in normalized_name:
+                score += 5
+            if score > best_score:
+                best = path
+                best_score = score
+        resolved[activity] = best
     return resolved

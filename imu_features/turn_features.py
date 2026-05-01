@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import find_peaks
 
 from .config import PipelineConfig
 from .utils import (
@@ -8,8 +10,10 @@ from .utils import (
     build_nan_feature_dict,
     count_pauses,
     detect_turn_window,
+    estimate_sampling_interval_s,
     robust_p2p_threshold,
     safe_gradient,
+    select_motion_acc_signal,
     select_turn_angular_signal,
     spectral_entropy,
 )
@@ -19,7 +23,7 @@ TURN_SUFFIXES = [
     "mean_angular_velocity",
     "peak_angular_velocity",
     "ang_vel_std",
-    "pause_count",
+    "step_count",
     "pause_time",
     "jerk_std",
     "entropy",
@@ -28,6 +32,34 @@ TURN_SUFFIXES = [
 
 def turn_feature_names(prefix):
     return [f"{prefix}_{suffix}" for suffix in TURN_SUFFIXES]
+
+
+def _turn_step_count_from_acc(df, time_s, turn_mask, config):
+    """Count turn steps from acceleration peaks inside the detected turn window."""
+    if df is None or not np.any(turn_mask):
+        return np.nan
+
+    acc_signal, _ = select_motion_acc_signal(df, config.prefer_useracc_for_motion)
+    t_turn = time_s[turn_mask]
+    acc_turn = acc_signal[turn_mask]
+    if len(acc_turn) < 3:
+        return np.nan
+
+    fs_turn = 1.0 / estimate_sampling_interval_s(t_turn) if len(t_turn) > 2 else np.nan
+    if not np.isfinite(fs_turn) or fs_turn <= 0:
+        return np.nan
+
+    acc_turn_smooth = gaussian_filter1d(acc_turn, sigma=1)
+    if not np.isfinite(acc_turn_smooth).any():
+        return np.nan
+
+    threshold = float(np.nanmean(acc_turn_smooth))
+    if not np.isfinite(threshold):
+        return np.nan
+
+    min_distance = max(1, int(0.2 * fs_turn))
+    peaks, _ = find_peaks(acc_turn_smooth, height=threshold, distance=min_distance)
+    return float(len(peaks))
 
 
 def extract_turn_features(df, meta, config, prefix):
@@ -68,6 +100,7 @@ def extract_turn_features(df, meta, config, prefix):
     out[f"{prefix}_mean_angular_velocity"] = float(np.nanmean(ang_abs_for_stats))
     out[f"{prefix}_peak_angular_velocity"] = float(np.nanmax(ang_abs_for_stats))
     out[f"{prefix}_ang_vel_std"] = float(np.nanstd(ang_for_stats))
+    out[f"{prefix}_step_count"] = _turn_step_count_from_acc(df, time_s, turn_mask, config)
 
     pause_min_duration_s = adaptive_pause_min_duration(
         angular_velocity=ang_for_stats,
@@ -76,13 +109,12 @@ def extract_turn_features(df, meta, config, prefix):
         beta=config.turn_pause.adaptive_beta,
     )
 
-    pause_count, pause_time = count_pauses(
+    _, pause_time = count_pauses(
         angular_velocity=ang_for_stats,
         time_s=t_for_stats,
         threshold=pause_threshold,
         min_duration_s=pause_min_duration_s,
     )
-    out[f"{prefix}_pause_count"] = pause_count
     out[f"{prefix}_pause_time"] = pause_time
 
     angular_jerk = safe_gradient(ang_abs_for_stats, t_for_stats)
