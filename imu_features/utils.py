@@ -18,6 +18,14 @@ ACTIVITY_ORDER = (
     "stand_to_sit",
 )
 
+ACTIVITY_MAX_DURATION_S = {
+    "walk": 31.0,
+    "left_turn": 11.0,
+    "right_turn": 11.0,
+    "sit_to_stand": 17.0,
+    "stand_to_sit": 17.0,
+}
+
 CANONICAL_COLUMNS = (
     "timestamp",
     "accel_x",
@@ -828,6 +836,93 @@ def preprocess_activity_dataframe(df_raw, config):
 def read_and_preprocess_csv(csv_path, config):
     df_raw = pd.read_csv(csv_path)
     return preprocess_activity_dataframe(df_raw, config)
+
+
+def _robust_scale(values):
+    values = np.asarray(values, dtype=float)
+    finite = values[np.isfinite(values)]
+    if len(finite) == 0:
+        return np.nan, np.nan
+    center = float(np.nanmedian(finite))
+    mad = float(np.nanmedian(np.abs(finite - center)))
+    scale = 1.4826 * mad
+    if not np.isfinite(scale) or scale == 0:
+        scale = float(np.nanstd(finite))
+    return center, scale
+
+
+def _activity_score(df):
+    score_parts = []
+    for col in ("useracc_mag", "acc_mag", "gyro_mag"):
+        if col not in df:
+            continue
+        values = df[col].to_numpy(dtype=float)
+        center, scale = _robust_scale(values)
+        if not np.isfinite(scale) or scale == 0:
+            continue
+        score_parts.append(np.abs(values - center) / scale)
+    if not score_parts:
+        return np.full(len(df), np.nan, dtype=float)
+    return np.nanmax(np.vstack(score_parts), axis=0)
+
+
+def _recompute_meta_and_derived(df):
+    df = df.reset_index(drop=True).copy()
+    if df.empty:
+        return df, SignalMeta(dt_s=np.nan, fs_hz=np.nan, duration_s=np.nan, n_samples=0)
+
+    if "timestamp_s" in df:
+        df["timestamp_s"] = df["timestamp_s"] - df["timestamp_s"].iloc[0]
+    df["time_s"] = df["time_s"] - df["time_s"].iloc[0]
+    time_s = df["time_s"].to_numpy(dtype=float)
+    dt_s = estimate_sampling_interval_s(time_s)
+    fs_hz = float(1.0 / dt_s) if np.isfinite(dt_s) and dt_s > 0 else np.nan
+    duration_s = float(time_s[-1] - time_s[0]) if len(time_s) > 1 else 0.0
+
+    if "acc_mag" in df:
+        df["acc_jerk"] = safe_gradient(df["acc_mag"].to_numpy(dtype=float), time_s)
+    if "useracc_mag" in df:
+        df["useracc_jerk"] = safe_gradient(df["useracc_mag"].to_numpy(dtype=float), time_s)
+    if "gyro_mag" in df:
+        df["gyro_jerk"] = safe_gradient(df["gyro_mag"].to_numpy(dtype=float), time_s)
+
+    meta = SignalMeta(dt_s=dt_s, fs_hz=fs_hz, duration_s=duration_s, n_samples=len(df))
+    return df, meta
+
+
+def truncate_to_last_activity_window(df, meta, max_duration_s, truncate_after_s=None):
+    """Keep the last fixed-duration slice when recordings run too long."""
+    if df is None or meta is None or df.empty:
+        return df, meta
+    if not np.isfinite(max_duration_s) or max_duration_s <= 0:
+        return df, meta
+    if "time_s" not in df:
+        return df, meta
+
+    time_s = df["time_s"].to_numpy(dtype=float)
+    if len(time_s) < 2 or not np.isfinite(time_s).any():
+        return df, meta
+
+    total_duration = float(np.nanmax(time_s) - np.nanmin(time_s))
+    truncate_after_s = float(truncate_after_s) if truncate_after_s is not None else float(max_duration_s)
+    if total_duration <= truncate_after_s:
+        return df, meta
+
+    end_t = float(np.nanmax(time_s))
+    start_t = max(float(np.nanmin(time_s)), end_t - float(max_duration_s))
+    keep = (time_s >= start_t) & (time_s <= end_t)
+    if int(np.sum(keep)) < 2:
+        keep = time_s >= (float(np.nanmax(time_s)) - float(max_duration_s))
+
+    truncated = df.loc[keep].copy()
+    return _recompute_meta_and_derived(truncated)
+
+
+def truncate_activity_dataframe(df, meta, activity):
+    max_duration_s = ACTIVITY_MAX_DURATION_S.get(activity)
+    if max_duration_s is None:
+        return df, meta
+    return truncate_to_last_activity_window(df, meta, max_duration_s=max_duration_s)
 
 
 def resolve_activity_files(date_dir):

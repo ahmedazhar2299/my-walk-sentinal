@@ -16,6 +16,7 @@ from .utils import (
     select_motion_acc_signal,
     select_turn_angular_signal,
     spectral_entropy,
+    truncate_activity_dataframe,
 )
 
 TURN_SUFFIXES = [
@@ -68,6 +69,8 @@ def extract_turn_features(df, meta, config, prefix):
     if df is None or meta is None or len(df) < config.min_rows_per_activity:
         return build_nan_feature_dict(names)
 
+    activity = "left_turn" if str(prefix).startswith("left") else "right_turn"
+    df, meta = truncate_activity_dataframe(df, meta, activity)
     out = build_nan_feature_dict(names)
     time_s = df["time_s"].to_numpy(dtype=float)
     angular_signal, _ = select_turn_angular_signal(df, config, meta.fs_hz)

@@ -25,6 +25,7 @@ from imu_features.utils import (
     safe_gradient,
     select_motion_acc_signal,
     select_turn_angular_signal,
+    truncate_activity_dataframe,
 )
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -141,9 +142,33 @@ def discover_activity_files(base_dir, activity_filter=None):
     return discovered
 
 
+def _infer_activity_from_path(path):
+    probe = _norm_text(Path(path).stem + " " + Path(path).parent.name + " " + str(path))
+    matches = []
+    for activity, aliases in ACTIVITY_ALIASES.items():
+        for rank, alias in enumerate(aliases):
+            normalized_alias = _norm_text(alias)
+            if normalized_alias and normalized_alias in probe:
+                matches.append((len(normalized_alias), -rank, activity))
+                break
+    if not matches:
+        return None
+    return sorted(matches, reverse=True)[0][2]
+
+
 def load_activity_file(path):
     raw = pd.read_csv(path)
-    return preprocess_activity_dataframe(raw, PIPELINE_CONFIG)
+    df, meta = preprocess_activity_dataframe(raw, PIPELINE_CONFIG)
+    activity = _infer_activity_from_path(path)
+    if activity is not None:
+        df, meta = truncate_activity_dataframe(df, meta, activity)
+    return df, meta
+
+
+def load_activity_file_for_activity(path, activity):
+    raw = pd.read_csv(path)
+    df, meta = preprocess_activity_dataframe(raw, PIPELINE_CONFIG)
+    return truncate_activity_dataframe(df, meta, activity)
 
 
 def standardize_columns(df):
@@ -792,6 +817,7 @@ def _turn_thresholds(ang, t, meta):
 
 
 def plot_walk_validation(activity_name, df, meta):
+    df, meta = truncate_activity_dataframe(df, meta, "walk")
     t = df['time_s'].to_numpy(dtype=float)
     acc, src = select_motion_acc_signal(df, PIPELINE_CONFIG.prefer_useracc_for_motion)
 
@@ -957,6 +983,8 @@ def _turn_window_from_threshold(ang, t, threshold):
 
 
 def plot_turn_validation(activity_name, df, meta):
+    activity_key = "left_turn" if "left" in str(activity_name).lower() else "right_turn"
+    df, meta = truncate_activity_dataframe(df, meta, activity_key)
     t = df['time_s'].to_numpy(dtype=float)
 
     ang, src = select_turn_angular_signal(df, PIPELINE_CONFIG, meta.fs_hz)
@@ -1220,6 +1248,7 @@ def plot_turn_pair_xcorr(left_data, right_data):
 
 
 def plot_transition_validation(activity_name, df, meta):
+    df, meta = truncate_activity_dataframe(df, meta, activity_name)
     t = df['time_s'].to_numpy(dtype=float)
     gate_cfg = _apply_notebook_window_gate_settings()
     flex_ext = transition_flexion_extension_peaks(df, meta, PIPELINE_CONFIG)

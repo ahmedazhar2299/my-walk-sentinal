@@ -18,6 +18,7 @@ from .utils import (
     resolve_activity_files,
     robust_p2p_threshold,
     select_turn_angular_signal,
+    truncate_activity_dataframe,
 )
 from .walk_features import (
     WALK_FEATURE_NAMES,
@@ -97,6 +98,7 @@ def _extract_activity_features(activity, csv_path, config, verbose):
 
     try:
         df, meta = read_and_preprocess_csv(csv_path, config)
+        df, meta = truncate_activity_dataframe(df, meta, activity)
     except Exception as exc:
         if verbose:
             print(f"[WARN] Failed to process {csv_path}: {exc}")
@@ -208,6 +210,8 @@ def _load_turn_xcorr_data(csv_path, config, verbose):
         return None
     try:
         df, meta = read_and_preprocess_csv(csv_path, config)
+        activity = "left_turn" if "left" in str(csv_path).lower() else "right_turn"
+        df, meta = truncate_activity_dataframe(df, meta, activity)
         time_s = df["time_s"].to_numpy(dtype=float)
         angular_signal, _ = select_turn_angular_signal(df, config, meta.fs_hz)
         angular_abs = np.abs(angular_signal)
@@ -241,6 +245,8 @@ def _load_transition_xcorr_data(csv_path, config, verbose):
         return None
     try:
         df, meta = read_and_preprocess_csv(csv_path, config)
+        activity = "sit_to_stand" if "sit_to_stand" in str(csv_path).lower() or "sit_stand" in str(csv_path).lower() else "stand_to_sit"
+        df, meta = truncate_activity_dataframe(df, meta, activity)
         flex_ext = transition_flexion_extension_peaks(df, meta, config)
         return {
             "time_s": flex_ext["time_s"],

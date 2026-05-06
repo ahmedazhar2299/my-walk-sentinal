@@ -12,6 +12,7 @@ from .utils import (
     safe_gradient,
     select_motion_acc_signal,
     spectral_entropy,
+    truncate_activity_dataframe,
 )
 
 TRANSITION_SUFFIXES = [
@@ -143,6 +144,8 @@ def transition_flexion_extension_peaks(df, meta, config):
     if df is None or meta is None or len(df) < config.min_rows_per_activity:
         return empty
 
+    activity = "sit_to_stand"
+    df, meta = truncate_activity_dataframe(df, meta, activity)
     time_s = df["time_s"].to_numpy(dtype=float)
     gyro_mag = df["gyro_mag"].to_numpy(dtype=float)
     prelim_start_t, prelim_end_t, prelim_duration, prelim_mask, prelim_threshold = _transition_window(
@@ -237,6 +240,7 @@ def extract_transition_features(df, meta, config, prefix):
     if df is None or meta is None or len(df) < config.min_rows_per_activity:
         return build_nan_feature_dict(names)
 
+    df, meta = truncate_activity_dataframe(df, meta, prefix)
     out = build_nan_feature_dict(names)
     time_s = df["time_s"].to_numpy(dtype=float)
     acc_signal, _ = select_motion_acc_signal(df, config.prefer_useracc_for_motion)

@@ -69,6 +69,18 @@ Recognized activity aliases:
 
 Synchronized CSVs are preferred when both raw and synchronized files exist.
 
+## Long Recording Truncation
+
+Some sensor files can keep recording after the activity is over. Before plotting or extracting features, the code uses a simple fixed-range rule from the end of the file:
+
+- Walk: files up to `31s` are unchanged; longer files keep the last `31s`.
+- Left/right turn: files up to `11s` are unchanged; longer files keep the last `11s`.
+- Sit-to-stand / stand-to-sit: files up to `17s` are unchanged; longer files keep the last `17s`.
+
+After truncation, `time_s` is reset so plots start at `0s`.
+
+This selected segment is used everywhere: raw accelerometer/gyroscope/user-accelerometer plots, wavelet/FFT/jerk plots, cross-correlation comparisons, and all feature tables.
+
 ## Preprocessing
 
 For each activity CSV:

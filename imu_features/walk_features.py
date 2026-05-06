@@ -13,6 +13,7 @@ from .utils import (
     rms,
     select_motion_acc_signal,
     spectral_entropy,
+    truncate_activity_dataframe,
     wavelet_step_summary,
 )
 
@@ -337,6 +338,7 @@ def extract_walk_nonlinear_features(df, meta, config, max_samples=NONLINEAR_MAX_
     if df is None or meta is None or len(df) < config.min_rows_per_activity:
         return build_nan_feature_dict(WALK_NONLINEAR_FEATURE_NAMES)
 
+    df, meta = truncate_activity_dataframe(df, meta, "walk")
     out = build_nan_feature_dict(WALK_NONLINEAR_FEATURE_NAMES)
     time_s = df["time_s"].to_numpy(dtype=float)
     acc_signal, _ = select_motion_acc_signal(df, config.prefer_useracc_for_motion)
@@ -380,6 +382,7 @@ def extract_walk_features(df, meta, config):
     if df is None or meta is None or len(df) < config.min_rows_per_activity:
         return build_nan_feature_dict(WALK_FEATURE_NAMES)
 
+    df, meta = truncate_activity_dataframe(df, meta, "walk")
     out = build_nan_feature_dict(WALK_FEATURE_NAMES)
     time_s = df["time_s"].to_numpy(dtype=float)
     acc_signal, acc_source = select_motion_acc_signal(df, config.prefer_useracc_for_motion)
