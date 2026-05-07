@@ -982,7 +982,7 @@ def plot_turn_validation(activity_name, df, meta):
             acc_turn_smooth = gaussian_filter1d(acc_turn, sigma=1)
             turn_compare_k = float(PLOT_PARAMS.get('turn_compare_threshold_k', 1.0))
             turn_peak_threshold = turn_compare_k * float(np.nanmean(acc_turn_smooth))
-            turn_peak_distance = max(1, int(0.2 * fs_turn))
+            turn_peak_distance = max(1, int(0.45 * fs_turn))
             turn_peak_indices, _ = find_peaks(
                 acc_turn_smooth,
                 height=turn_peak_threshold,
