@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 from pathlib import Path
+import shutil
 
 from playwright.async_api import async_playwright
 
@@ -20,6 +21,9 @@ LOGGER = logging.getLogger(__name__)
 async def run(config: ScraperConfig) -> None:
     """Run the end-to-end MyWalkSentinel export workflow."""
     setup_logging(config.log_level)
+    if config.overwrite_patient_dir and config.patient_output_dir.exists():
+        LOGGER.warning("Removing existing output folder before rerun: %s", config.patient_output_dir)
+        shutil.rmtree(config.patient_output_dir)
     config.ensure_directories()
 
     async with async_playwright() as p:
@@ -66,6 +70,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--headed", action="store_true", help="Run browser visibly for debugging.")
     parser.add_argument("--download-dir", default=None, help="Output root. Defaults to Scrapper.")
     parser.add_argument("--log-level", default=None, help="Python logging level. Defaults to INFO.")
+    parser.add_argument(
+        "--no-overwrite",
+        action="store_true",
+        help="Keep an existing patient output folder instead of deleting it before the run.",
+    )
     return parser.parse_args()
 
 
@@ -76,6 +85,7 @@ def main() -> None:
         headless=False if args.headed else None,
         output_root=Path(args.download_dir) if args.download_dir else None,
         log_level=args.log_level,
+        overwrite_patient_dir=not args.no_overwrite,
     )
     asyncio.run(run(config))
 

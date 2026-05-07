@@ -241,6 +241,7 @@ def load_sensor_frames_chunked(csv_path):
         if chunk.empty:
             continue
 
+        chunk["Timestamp"] = chunk["Timestamp"].astype(float)
         chunk["X"] = pd.to_numeric(chunk["X"], errors="coerce")
         chunk["Y"] = pd.to_numeric(chunk["Y"], errors="coerce")
         chunk["Z"] = pd.to_numeric(chunk["Z"], errors="coerce")
@@ -410,14 +411,24 @@ def is_date_folder_name(name):
     return False
 
 
+def is_processable_patient_folder(path):
+    """Return True for real patient export folders and False for backups/internal folders."""
+    if not path.is_dir() or path.name.startswith(".") or path.name.startswith("_"):
+        return False
+    if "backup" in path.name.lower():
+        return False
+    return True
+
+
 def detect_root_mode(root_dir):
     """
     root mode:
+    - scrapper_root: root/patient_id/date/.../files
     - patient_root: root/date/.../files
     - date_root: root/.../files where root itself is a date folder
     - invalid: anything else
     """
-    child_dirs = [p for p in root_dir.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    child_dirs = [p for p in root_dir.iterdir() if is_processable_patient_folder(p)]
 
     if is_date_folder_name(root_dir.name):
         return "date_root"
@@ -425,17 +436,30 @@ def detect_root_mode(root_dir):
     if any(is_date_folder_name(d.name) for d in child_dirs):
         return "patient_root"
 
+    if any(
+        any(is_date_folder_name(grandchild.name) for grandchild in child.iterdir() if grandchild.is_dir())
+        for child in child_dirs
+    ):
+        return "scrapper_root"
+
     return "invalid"
 
 
 def file_matches_strict_layout(file_path, root_dir, root_mode):
     """
     Strict layouts accepted:
+    - scrapper_root: root/patient/date/.../file
     - patient_root: root/date/.../file
     - date_root: root/.../file (root is date folder)
     """
     rel = file_path.resolve().relative_to(root_dir.resolve())
     parts = rel.parts
+
+    if root_mode == "scrapper_root":
+        if len(parts) < 3:
+            return False
+        date_part = parts[1]
+        return is_date_folder_name(date_part)
 
     if root_mode == "patient_root":
         if len(parts) < 2:
@@ -558,7 +582,7 @@ def process_folder(root_dir, overwrite=True):
     root_mode = detect_root_mode(root_dir)
     if root_mode == "invalid":
         print("[WARNING] Invalid folder format. Conversion blocked.")
-        print("[WARNING] Expected: root/date/.../*.csv or *.json")
+        print("[WARNING] Expected: root/patient/date/.../*.csv, root/date/.../*.csv, or *.json")
         print("[WARNING] Or, select a single date folder directly.")
         summary = {
             "root": str(root_dir),
@@ -578,24 +602,46 @@ def process_folder(root_dir, overwrite=True):
     def get_date_dirs(root_path, mode):
         if mode == "date_root":
             return [root_path]
+        if mode == "scrapper_root":
+            date_dirs = []
+            patient_dirs = [d for d in root_path.iterdir() if is_processable_patient_folder(d)]
+            for patient_dir in sorted(patient_dirs):
+                date_dirs.extend(
+                    sorted([d for d in patient_dir.iterdir() if d.is_dir() and is_date_folder_name(d.name)])
+                )
+            return date_dirs
         return sorted([d for d in root_path.iterdir() if d.is_dir() and is_date_folder_name(d.name)])
 
     def get_activity_dirs(date_dir):
-        return sorted(
-            [
-                d
-                for d in date_dir.iterdir()
-                if d.is_dir() and not d.name.startswith(".") and d.name.lower() not in {"csv", "json", "synchronized"}
-            ]
-        )
+        """
+        Return leaf activity folders for both Scrapper layouts:
+        - date/activity_name/file.csv
+        - date/activity_1/activity_name/file.csv
+        """
+        excluded = {"csv", "json", "synchronized"}
+        activity_dirs = []
+
+        for child in sorted(date_dir.iterdir()):
+            if not child.is_dir() or child.name.startswith(".") or child.name.lower() in excluded:
+                continue
+
+            if re.fullmatch(r"activity_\d+", child.name.lower()):
+                for nested_activity in sorted(child.iterdir()):
+                    if (
+                        nested_activity.is_dir()
+                        and not nested_activity.name.startswith(".")
+                        and nested_activity.name.lower() not in excluded
+                    ):
+                        activity_dirs.append(nested_activity)
+            else:
+                activity_dirs.append(child)
+
+        return activity_dirs
 
     def organize_activity_inputs(activity_dir):
         csv_dir = activity_dir / "csv"
         json_dir = activity_dir / "json"
         sync_dir = activity_dir / "synchronized"
-        csv_dir.mkdir(parents=True, exist_ok=True)
-        json_dir.mkdir(parents=True, exist_ok=True)
-        sync_dir.mkdir(parents=True, exist_ok=True)
 
         moved_csv_local = 0
         moved_json_local = 0
@@ -605,13 +651,16 @@ def process_folder(root_dir, overwrite=True):
                 continue
 
             if item.suffix.lower() == ".json":
+                json_dir.mkdir(parents=True, exist_ok=True)
                 safe_move(item, json_dir / item.name)
                 moved_json_local += 1
             elif item.suffix.lower() == ".csv":
                 if item.name.lower().endswith("_synchronized.csv"):
+                    sync_dir.mkdir(parents=True, exist_ok=True)
                     safe_move(item, sync_dir / item.name)
                     moved_sync_local += 1
                 else:
+                    csv_dir.mkdir(parents=True, exist_ok=True)
                     safe_move(item, csv_dir / item.name)
                     moved_csv_local += 1
 
@@ -656,10 +705,11 @@ def process_folder(root_dir, overwrite=True):
         moved_sync += m_sync
 
         # Convert all JSON in activity/json -> activity/csv
-        json_files = sorted([p for p in json_dir.glob("*.json") if p.is_file()])
+        json_files = sorted([p for p in json_dir.glob("*.json") if p.is_file()]) if json_dir.exists() else []
         json_found += len(json_files)
         for json_path in json_files:
             try:
+                csv_dir.mkdir(parents=True, exist_ok=True)
                 output_csv = csv_dir / f"{json_path.stem}.csv"
                 out_csv, row_count, wrote_file = convert_json_file_to_csv(
                     json_path,
@@ -675,16 +725,18 @@ def process_folder(root_dir, overwrite=True):
                 print(f"[ERROR] {exc}")
 
         # Rebuild synchronized outputs from activity/csv each run.
-        for old_sync in sync_dir.glob("*_synchronized.csv"):
-            try:
-                old_sync.unlink()
-            except Exception:
-                pass
+        if sync_dir.exists():
+            for old_sync in sync_dir.glob("*_synchronized.csv"):
+                try:
+                    old_sync.unlink()
+                except Exception:
+                    pass
 
-        csv_files = sorted([p for p in csv_dir.glob("*.csv") if p.is_file()])
+        csv_files = sorted([p for p in csv_dir.glob("*.csv") if p.is_file()]) if csv_dir.exists() else []
         csv_found += len(csv_files)
         for csv_path in csv_files:
             try:
+                sync_dir.mkdir(parents=True, exist_ok=True)
                 sync_name = f"{csv_path.stem}_synchronized.csv"
                 sync_path = sync_dir / sync_name
                 rows_synced = synchronize_sensor_data(csv_path, sync_path)

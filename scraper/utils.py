@@ -41,6 +41,7 @@ class ScraperConfig:
     retry_backoff_seconds: float
     log_level: str
     user_agent: str
+    overwrite_patient_dir: bool
 
     @classmethod
     def from_env(
@@ -50,6 +51,7 @@ class ScraperConfig:
         headless: bool | None = None,
         output_root: Path | None = None,
         log_level: str | None = None,
+        overwrite_patient_dir: bool | None = None,
     ) -> "ScraperConfig":
         load_dotenv()
         username = os.getenv("USERNAME")
@@ -72,6 +74,11 @@ class ScraperConfig:
                 "USER_AGENT",
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+            ),
+            overwrite_patient_dir=(
+                overwrite_patient_dir
+                if overwrite_patient_dir is not None
+                else env_bool("OVERWRITE_PATIENT_DIR", True)
             ),
         )
 
