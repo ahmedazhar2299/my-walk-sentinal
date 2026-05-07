@@ -17,11 +17,13 @@ from imu_features.utils import (
     count_pauses,
     detect_active_window as core_detect_active_window,
     detect_peaks,
+    detect_threshold_turn_window,
     estimate_sampling_interval_s,
     robust_p2p_threshold,
     p2p_distribution_threshold,
     window_peak_to_peak,
     preprocess_activity_dataframe,
+    read_preprocess_activity_csv,
     safe_gradient,
     select_motion_acc_signal,
     select_turn_angular_signal,
@@ -157,18 +159,15 @@ def _infer_activity_from_path(path):
 
 
 def load_activity_file(path):
-    raw = pd.read_csv(path)
-    df, meta = preprocess_activity_dataframe(raw, PIPELINE_CONFIG)
     activity = _infer_activity_from_path(path)
-    if activity is not None:
-        df, meta = truncate_activity_dataframe(df, meta, activity)
-    return df, meta
+    if activity is None:
+        raw = pd.read_csv(path)
+        return preprocess_activity_dataframe(raw, PIPELINE_CONFIG)
+    return read_preprocess_activity_csv(path, PIPELINE_CONFIG, activity)
 
 
 def load_activity_file_for_activity(path, activity):
-    raw = pd.read_csv(path)
-    df, meta = preprocess_activity_dataframe(raw, PIPELINE_CONFIG)
-    return truncate_activity_dataframe(df, meta, activity)
+    return read_preprocess_activity_csv(path, PIPELINE_CONFIG, activity)
 
 
 def standardize_columns(df):
@@ -938,48 +937,14 @@ def plot_walk_validation(activity_name, df, meta):
     }
 
 def _turn_window_from_threshold(ang, t, threshold):
-    if len(t) == 0:
-        return np.nan, np.nan, np.nan, np.zeros(0, dtype=bool)
-
-    ang = np.asarray(ang, dtype=float)
-    t = np.asarray(t, dtype=float)
-    fs_hz = 1.0 / estimate_sampling_interval_s(t) if len(t) > 2 else np.nan
-
-    active = np.isfinite(ang) & (ang >= threshold)
-    if np.isfinite(fs_hz) and fs_hz > 0:
-        active = _mask_close_gaps(active, max_gap_samples=max(1, int(0.60 * fs_hz)))
-
-    min_run = max(1, int(0.25 * fs_hz)) if np.isfinite(fs_hz) and fs_hz > 0 else 1
-    cleaned = np.zeros(len(active), dtype=bool)
-    i = 0
-    while i < len(active):
-        if not active[i]:
-            i += 1
-            continue
-        j = i
-        while j < len(active) and active[j]:
-            j += 1
-        if (j - i) >= min_run:
-            cleaned[i:j] = True
-        i = j
-    active = cleaned
-
-    if not np.any(active):
-        start_t, end_t, duration, mask, _ = _detect_active_window(ang, t, min_duration_s=0.8)
-        return start_t, end_t, duration, mask
-
-    idx = np.where(active)[0]
-    i0 = int(idx[0])
-    i1 = int(idx[-1])
-    pad = int(0.15 * fs_hz) if np.isfinite(fs_hz) and fs_hz > 0 else 1
-    i0 = max(0, i0 - pad)
-    i1 = min(len(t) - 1, i1 + pad)
-
-    start_t = float(t[i0])
-    end_t = float(t[i1])
-    mask = np.zeros(len(t), dtype=bool)
-    mask[i0:i1 + 1] = True
-    return start_t, end_t, float(end_t - start_t), mask
+    gate_cfg = _apply_notebook_window_gate_settings()
+    return detect_threshold_turn_window(
+        angular_signal_abs=ang,
+        time_s=t,
+        threshold=threshold,
+        window_sec=gate_cfg.window_sec,
+        min_duration_s=gate_cfg.turn_min_duration_s,
+    )
 
 
 def plot_turn_validation(activity_name, df, meta):

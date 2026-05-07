@@ -752,6 +752,63 @@ def detect_turn_window(angular_signal_abs, time_s, threshold, window_sec=1.0):
     return start_t, end_t, duration, mask
 
 
+def detect_threshold_turn_window(
+    angular_signal_abs,
+    time_s,
+    threshold,
+    window_sec=1.0,
+    min_duration_s=0.8,
+):
+    """Detect turn start/end from the same threshold-crossing logic used in notebooks."""
+    angular_signal_abs = np.asarray(angular_signal_abs, dtype=float)
+    time_s = np.asarray(time_s, dtype=float)
+    if len(time_s) == 0:
+        return np.nan, np.nan, np.nan, np.zeros(0, dtype=bool)
+
+    fs_hz = 1.0 / estimate_sampling_interval_s(time_s) if len(time_s) > 2 else np.nan
+    active = np.isfinite(angular_signal_abs) & (angular_signal_abs >= threshold)
+    if np.isfinite(fs_hz) and fs_hz > 0:
+        active = mask_close_gaps(active, max_gap_samples=max(1, int(0.60 * fs_hz)))
+
+    min_run = max(1, int(0.25 * fs_hz)) if np.isfinite(fs_hz) and fs_hz > 0 else 1
+    cleaned = np.zeros(len(active), dtype=bool)
+    i = 0
+    while i < len(active):
+        if not active[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(active) and active[j]:
+            j += 1
+        if (j - i) >= min_run:
+            cleaned[i:j] = True
+        i = j
+    active = cleaned
+
+    if not np.any(active):
+        start_t, end_t, duration, mask, _ = detect_active_window(
+            angular_signal_abs,
+            time_s,
+            min_duration_s=min_duration_s,
+            threshold=None,
+            window_sec=window_sec,
+        )
+        return start_t, end_t, duration, mask
+
+    idx = np.where(active)[0]
+    i0 = int(idx[0])
+    i1 = int(idx[-1])
+    pad = int(0.15 * fs_hz) if np.isfinite(fs_hz) and fs_hz > 0 else 1
+    i0 = max(0, i0 - pad)
+    i1 = min(len(time_s) - 1, i1 + pad)
+
+    start_t = float(time_s[i0])
+    end_t = float(time_s[i1])
+    mask = np.zeros(len(time_s), dtype=bool)
+    mask[i0:i1 + 1] = True
+    return start_t, end_t, float(end_t - start_t), mask
+
+
 def select_motion_acc_signal(df, prefer_useracc=True):
     if prefer_useracc and "useracc_mag" in df and not np.all(np.isnan(df["useracc_mag"].to_numpy())):
         return df["useracc_mag"].to_numpy(dtype=float), "useracc_mag"
@@ -836,6 +893,16 @@ def preprocess_activity_dataframe(df_raw, config):
 def read_and_preprocess_csv(csv_path, config):
     df_raw = pd.read_csv(csv_path)
     return preprocess_activity_dataframe(df_raw, config)
+
+
+def read_preprocess_activity_csv(csv_path, config, activity):
+    """Read, preprocess, and select the fixed activity segment for one CSV."""
+    df, meta = read_and_preprocess_csv(csv_path, config)
+    df, meta = truncate_activity_dataframe(df, meta, activity)
+    df.attrs["activity"] = activity
+    df.attrs["source_csv"] = str(csv_path)
+    df.attrs["selected_segment_rule"] = f"last_{ACTIVITY_MAX_DURATION_S.get(activity, 'full')}_seconds_if_longer"
+    return df, meta
 
 
 def _robust_scale(values):

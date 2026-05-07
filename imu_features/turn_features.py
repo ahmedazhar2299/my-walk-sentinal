@@ -9,7 +9,7 @@ from .utils import (
     adaptive_pause_min_duration,
     build_nan_feature_dict,
     count_pauses,
-    detect_turn_window,
+    detect_threshold_turn_window,
     estimate_sampling_interval_s,
     robust_p2p_threshold,
     safe_gradient,
@@ -75,20 +75,22 @@ def extract_turn_features(df, meta, config, prefix):
     time_s = df["time_s"].to_numpy(dtype=float)
     angular_signal, _ = select_turn_angular_signal(df, config, meta.fs_hz)
     angular_abs = np.abs(angular_signal)
+    turn_window_sec = getattr(config.window_gate, "turn_window_sec", config.window_gate.window_sec)
     turn_threshold, _ = robust_p2p_threshold(
         time_s=time_s,
         signal=angular_abs,
-        window_sec=config.window_gate.window_sec,
+        window_sec=turn_window_sec,
         k=config.window_gate.turn_threshold_k,
         fallback=config.window_gate.turn_min_amp_threshold,
     )
     pause_threshold = turn_threshold
 
-    start_t, end_t, duration, turn_mask = detect_turn_window(
+    start_t, end_t, duration, turn_mask = detect_threshold_turn_window(
         angular_signal_abs=angular_abs,
         time_s=time_s,
         threshold=turn_threshold,
-        window_sec=config.window_gate.window_sec,
+        window_sec=turn_window_sec,
+        min_duration_s=config.window_gate.turn_min_duration_s,
     )
     if np.any(turn_mask):
         ang_for_stats = angular_signal[turn_mask]

@@ -13,12 +13,11 @@ from .turn_features import extract_turn_features, turn_feature_names
 from .utils import (
     ACTIVITY_ORDER,
     build_nan_feature_dict,
-    detect_turn_window,
-    read_and_preprocess_csv,
+    detect_threshold_turn_window,
+    read_preprocess_activity_csv,
     resolve_activity_files,
     robust_p2p_threshold,
     select_turn_angular_signal,
-    truncate_activity_dataframe,
 )
 from .walk_features import (
     WALK_FEATURE_NAMES,
@@ -92,17 +91,24 @@ def _empty_features_for_activity(activity):
     return {}
 
 
-def _extract_activity_features(activity, csv_path, config, verbose):
+def _load_activity_dataframe(activity, csv_path, config, verbose):
     if csv_path is None:
-        return _empty_features_for_activity(activity)
-
+        return None
     try:
-        df, meta = read_and_preprocess_csv(csv_path, config)
-        df, meta = truncate_activity_dataframe(df, meta, activity)
+        df, meta = read_preprocess_activity_csv(csv_path, config, activity)
+        return {"df": df, "meta": meta, "path": csv_path}
     except Exception as exc:
         if verbose:
             print(f"[WARN] Failed to process {csv_path}: {exc}")
+        return None
+
+
+def _extract_activity_features(activity, activity_data, config):
+    if activity_data is None:
         return _empty_features_for_activity(activity)
+
+    df = activity_data["df"]
+    meta = activity_data["meta"]
 
     if activity == "walk":
         features = extract_walk_features(df, meta, config)
@@ -205,28 +211,29 @@ def _cycle_xcorr_features(data_a, data_b, prefix):
     }
 
 
-def _load_turn_xcorr_data(csv_path, config, verbose):
-    if csv_path is None:
+def _turn_xcorr_data_from_activity(activity_data, config, verbose):
+    if activity_data is None:
         return None
     try:
-        df, meta = read_and_preprocess_csv(csv_path, config)
-        activity = "left_turn" if "left" in str(csv_path).lower() else "right_turn"
-        df, meta = truncate_activity_dataframe(df, meta, activity)
+        df = activity_data["df"]
+        meta = activity_data["meta"]
         time_s = df["time_s"].to_numpy(dtype=float)
         angular_signal, _ = select_turn_angular_signal(df, config, meta.fs_hz)
         angular_abs = np.abs(angular_signal)
+        turn_window_sec = getattr(config.window_gate, "turn_window_sec", config.window_gate.window_sec)
         threshold, _ = robust_p2p_threshold(
             time_s=time_s,
             signal=angular_abs,
-            window_sec=config.window_gate.window_sec,
+            window_sec=turn_window_sec,
             k=config.window_gate.turn_threshold_k,
             fallback=config.window_gate.turn_min_amp_threshold,
         )
-        start_t, end_t, _, _ = detect_turn_window(
+        start_t, end_t, _, _ = detect_threshold_turn_window(
             angular_signal_abs=angular_abs,
             time_s=time_s,
             threshold=threshold,
-            window_sec=config.window_gate.window_sec,
+            window_sec=turn_window_sec,
+            min_duration_s=config.window_gate.turn_min_duration_s,
         )
         return {
             "time_s": time_s,
@@ -236,17 +243,16 @@ def _load_turn_xcorr_data(csv_path, config, verbose):
         }
     except Exception as exc:
         if verbose:
-            print(f"[WARN] Failed to process turn xcorr data {csv_path}: {exc}")
+            print(f"[WARN] Failed to process turn xcorr data {activity_data.get('path')}: {exc}")
         return None
 
 
-def _load_transition_xcorr_data(csv_path, config, verbose):
-    if csv_path is None:
+def _transition_xcorr_data_from_activity(activity_data, config, verbose):
+    if activity_data is None:
         return None
     try:
-        df, meta = read_and_preprocess_csv(csv_path, config)
-        activity = "sit_to_stand" if "sit_to_stand" in str(csv_path).lower() or "sit_stand" in str(csv_path).lower() else "stand_to_sit"
-        df, meta = truncate_activity_dataframe(df, meta, activity)
+        df = activity_data["df"]
+        meta = activity_data["meta"]
         flex_ext = transition_flexion_extension_peaks(df, meta, config)
         return {
             "time_s": flex_ext["time_s"],
@@ -256,7 +262,7 @@ def _load_transition_xcorr_data(csv_path, config, verbose):
         }
     except Exception as exc:
         if verbose:
-            print(f"[WARN] Failed to process transition xcorr data {csv_path}: {exc}")
+            print(f"[WARN] Failed to process transition xcorr data {activity_data.get('path')}: {exc}")
         return None
 
 
@@ -332,6 +338,15 @@ def extract_dataset_features(
     rows = []
     for patient_id, date_str, date_dir in folders:
         activity_files = resolve_activity_files(date_dir)
+        activity_data = {
+            activity: _load_activity_dataframe(
+                activity=activity,
+                csv_path=activity_files.get(activity),
+                config=config,
+                verbose=verbose,
+            )
+            for activity in ACTIVITY_ORDER
+        }
 
         row = {
             "patient_id": patient_id,
@@ -340,21 +355,20 @@ def extract_dataset_features(
         for activity in ACTIVITY_ORDER:
             features = _extract_activity_features(
                 activity=activity,
-                csv_path=activity_files.get(activity),
+                activity_data=activity_data.get(activity),
                 config=config,
-                verbose=verbose,
             )
             row.update(features)
 
         row.update(_turn_asymmetry(row))
         row.update(_cycle_xcorr_features(
-            _load_turn_xcorr_data(activity_files.get("left_turn"), config, verbose),
-            _load_turn_xcorr_data(activity_files.get("right_turn"), config, verbose),
+            _turn_xcorr_data_from_activity(activity_data.get("left_turn"), config, verbose),
+            _turn_xcorr_data_from_activity(activity_data.get("right_turn"), config, verbose),
             prefix="turn_left_right",
         ))
         row.update(_cycle_xcorr_features(
-            _load_transition_xcorr_data(activity_files.get("sit_to_stand"), config, verbose),
-            _load_transition_xcorr_data(activity_files.get("stand_to_sit"), config, verbose),
+            _transition_xcorr_data_from_activity(activity_data.get("sit_to_stand"), config, verbose),
+            _transition_xcorr_data_from_activity(activity_data.get("stand_to_sit"), config, verbose),
             prefix="sitstand_standsit",
         ))
         rows.append(row)
@@ -369,11 +383,13 @@ def extract_dataset_features(
         ordered_columns = _dataset_columns()
         extra_columns = [col for col in df.columns if col not in ordered_columns]
         df = df.reindex(columns=ordered_columns + extra_columns)
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        df[numeric_cols] = df[numeric_cols].round(3)
 
     output_path = Path(output_csv or config.output_csv)
     if save_csv:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(output_path, index=False)
+        df.to_csv(output_path, index=False, float_format="%.3f")
         if verbose:
             print(f"[INFO] Saved feature dataset to {output_path} ({len(df)} rows)")
 

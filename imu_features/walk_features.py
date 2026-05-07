@@ -342,12 +342,7 @@ def extract_walk_nonlinear_features(df, meta, config, max_samples=NONLINEAR_MAX_
     out = build_nan_feature_dict(WALK_NONLINEAR_FEATURE_NAMES)
     time_s = df["time_s"].to_numpy(dtype=float)
     acc_signal, _ = select_motion_acc_signal(df, config.prefer_useracc_for_motion)
-    walk_window = wavelet_step_summary(
-        time_s=time_s,
-        signal=acc_signal,
-        wavelet_config=config.wavelet_steps,
-        fixed_window=False,
-    )
+    walk_window = _walk_summary_for_features(time_s, acc_signal, meta, config)
 
     start_t = float(walk_window.get("start_time_s", np.nan))
     end_t = float(walk_window.get("end_time_s", np.nan))
@@ -377,6 +372,27 @@ def extract_walk_nonlinear_features(df, meta, config, max_samples=NONLINEAR_MAX_
     return out
 
 
+def _walk_summary_for_features(time_s, acc_signal, meta, config):
+    """Use the same walk summary logic as the validation notebook."""
+    try:
+        from validation_plots.shared_validation import exact_compare_walk_summary
+
+        summary = exact_compare_walk_summary(time_s, acc_signal, meta.fs_hz)
+        if np.isfinite(float(summary.get("start_time_s", np.nan))) and np.isfinite(
+            float(summary.get("end_time_s", np.nan))
+        ):
+            return summary
+    except Exception:
+        pass
+
+    return wavelet_step_summary(
+        time_s=time_s,
+        signal=acc_signal,
+        wavelet_config=config.wavelet_steps,
+        fixed_window=False,
+    )
+
+
 def extract_walk_features(df, meta, config):
     """Extract gait and signal features from walk activity."""
     if df is None or meta is None or len(df) < config.min_rows_per_activity:
@@ -386,12 +402,7 @@ def extract_walk_features(df, meta, config):
     out = build_nan_feature_dict(WALK_FEATURE_NAMES)
     time_s = df["time_s"].to_numpy(dtype=float)
     acc_signal, acc_source = select_motion_acc_signal(df, config.prefer_useracc_for_motion)
-    wavelet = wavelet_step_summary(
-        time_s=time_s,
-        signal=acc_signal,
-        wavelet_config=config.wavelet_steps,
-        fixed_window=False,
-    )
+    wavelet = _walk_summary_for_features(time_s, acc_signal, meta, config)
 
     start_t = float(wavelet.get("start_time_s", np.nan))
     end_t = float(wavelet.get("end_time_s", np.nan))
