@@ -8,3 +8,5 @@ __pycache__
 .bulk_imu_last_dir
 /anaconda_projects
 .ipynb_checkpoints/
+/Scrapper
+.env
