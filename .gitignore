@@ -1,5 +1,5 @@
 /env
-/Activity_Data
+/Data_*
 *.csv
 /Stroke
 __pycache__
