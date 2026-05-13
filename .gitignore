@@ -11,3 +11,4 @@ project_filebrowser.db
 .bulk_imu_last_dir
 /Scrapper
 .env
+.data_*

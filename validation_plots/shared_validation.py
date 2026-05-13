@@ -105,8 +105,8 @@ def configure(pipeline_config=None, plot_params=None):
 
 ACTIVITY_ALIASES = {
     "walk": ["walk", "10_mw", "10mw", "1m", "1 meter"],
-    "left_turn": ["left_turn", "left turn", "l_360", "360 left", "left"],
-    "right_turn": ["right_turn", "right turn", "r_360", "360 right", "right"],
+    "left_turn": ["left_turn", "left turn", "turnl", "turn l", "l_360", "360 left", "left"],
+    "right_turn": ["right_turn", "right turn", "turnr", "turn r", "r_360", "360 right", "right"],
     "sit_to_stand": ["sit_to_stand", "sit to stand", "sit_stand", "sitstand"],
     "stand_to_sit": ["stand_to_sit", "stand to sit", "stand_sit", "standsit"],
 }

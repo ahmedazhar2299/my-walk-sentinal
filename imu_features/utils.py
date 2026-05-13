@@ -996,8 +996,8 @@ def resolve_activity_files(date_dir):
     """Resolve activity files from flat or nested patient/date folders."""
     aliases = {
         "walk": ("walk", "10_mw"),
-        "left_turn": ("left_turn", "360_leftturn"),
-        "right_turn": ("right_turn", "360_rightturn"),
+        "left_turn": ("left_turn", "360_leftturn", "turnl", "turn_l"),
+        "right_turn": ("right_turn", "360_rightturn", "turnr", "turn_r"),
         "sit_to_stand": ("sit_to_stand", "sit_stand"),
         "stand_to_sit": ("stand_to_sit", "stand_sit"),
     }
