@@ -327,6 +327,10 @@ def extract_dataset_features(
     """
     Extract one feature row per patient/date from a patient/date/activity folder tree.
     """
+    from validation_plots import shared_validation as validation
+
+    validation.configure(config, validation.plot_params_from_config(config))
+
     root = Path(dataset_root)
     if not root.exists():
         raise FileNotFoundError(f"Dataset root not found: {root}")

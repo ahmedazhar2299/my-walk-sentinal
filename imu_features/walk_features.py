@@ -375,9 +375,11 @@ def extract_walk_nonlinear_features(df, meta, config, max_samples=NONLINEAR_MAX_
 def _walk_summary_for_features(time_s, acc_signal, meta, config):
     """Use the same walk summary logic as the validation notebook."""
     try:
-        from validation_plots.shared_validation import exact_compare_walk_summary
+        from validation_plots import shared_validation as validation
 
-        summary = exact_compare_walk_summary(time_s, acc_signal, meta.fs_hz)
+        if validation.PIPELINE_CONFIG is not config:
+            validation.configure(config, validation.plot_params_from_config(config))
+        summary = validation.exact_compare_walk_summary(time_s, acc_signal, meta.fs_hz)
         if np.isfinite(float(summary.get("start_time_s", np.nan))) and np.isfinite(
             float(summary.get("end_time_s", np.nan))
         ):

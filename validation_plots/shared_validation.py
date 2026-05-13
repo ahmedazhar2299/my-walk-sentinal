@@ -42,7 +42,7 @@ def default_plot_params():
         "walk_compare_fs_hz": 10,
         "walk_compare_min_amp": 0.30,
         "walk_compare_threshold_k": 1.0,
-        "walk_compare_min_t_sec": 2.0,
+        "walk_compare_min_t_sec": 1.0,
         "walk_compare_step_freq_hz": (0.8, 2.3),
         "walk_compare_window_sec": 1.0,
         "turn_compare_fs_hz": 10,
@@ -56,10 +56,38 @@ def default_plot_params():
             "walk_min_amp_threshold": 0.30,
             "walk_threshold_k": 1.0,
             "turn_min_amp_threshold": 0.10,
-            "transition_min_amp_threshold": 0.30,
-            "transition_threshold_k": 1.0,
+            "turn_threshold_k": 5.0,
+            "turn_min_duration_s": 0.8,
+            "transition_min_amp_threshold": 0.10,
+            "transition_threshold_k": 3.0,
+            "transition_min_duration_s": 0.5,
         },
     }
+
+
+def plot_params_from_config(config):
+    params = default_plot_params()
+    params["walk_compare_fs_hz"] = int(config.wavelet_steps.resample_fs_hz)
+    params["walk_compare_min_amp"] = float(config.wavelet_steps.walk_min_amp_threshold)
+    params["walk_compare_threshold_k"] = float(config.wavelet_steps.walk_threshold_k)
+    params["walk_compare_step_freq_hz"] = (
+        float(config.wavelet_steps.step_freq_min_hz),
+        float(config.wavelet_steps.step_freq_max_hz),
+    )
+    params["pause_min_duration_beta"] = float(config.turn_pause.adaptive_beta)
+    params["window_gate"] = {
+        "window_sec": float(config.window_gate.window_sec),
+        "walk_min_amp_threshold": float(config.window_gate.walk_min_amp_threshold),
+        "walk_threshold_k": float(config.window_gate.walk_threshold_k),
+        "walk_min_duration_s": float(config.window_gate.walk_min_duration_s),
+        "turn_min_amp_threshold": float(config.window_gate.turn_min_amp_threshold),
+        "turn_threshold_k": float(config.window_gate.turn_threshold_k),
+        "turn_min_duration_s": float(config.window_gate.turn_min_duration_s),
+        "transition_min_amp_threshold": float(config.window_gate.transition_min_amp_threshold),
+        "transition_threshold_k": float(config.window_gate.transition_threshold_k),
+        "transition_min_duration_s": float(config.window_gate.transition_min_duration_s),
+    }
+    return params
 
 
 PIPELINE_CONFIG = PipelineConfig()
