@@ -11,5 +11,6 @@ __pycache__
 /Scrapper
 .env
 *.npy
+lstm_npy_outputs/
 .venv*
 .data_*
