@@ -279,7 +279,24 @@ def _dataset_columns():
     return columns
 
 
-def _iter_patient_date_dirs(dataset_root):
+def _iter_patient_date_dirs(dataset_root, patient_folder=None):
+    if patient_folder is not None:
+        patient_dir = Path(patient_folder)
+        if not patient_dir.exists():
+            patient_dir = Path(dataset_root) / str(patient_folder)
+        if not patient_dir.exists() or not patient_dir.is_dir():
+            raise FileNotFoundError(f"Patient folder not found: {patient_folder}")
+        if patient_dir.name.startswith(".") or patient_dir.name.lower() == "template":
+            return []
+
+        folders = []
+        date_dirs = sorted([d for d in patient_dir.iterdir() if d.is_dir()])
+        for date_dir in date_dirs:
+            if date_dir.name.startswith(".") or date_dir.name.lower() == "template":
+                continue
+            folders.append((patient_dir.name, date_dir.name, date_dir))
+        return folders
+
     folders = []
     for patient_dir in sorted([p for p in dataset_root.iterdir() if p.is_dir()]):
         if patient_dir.name.startswith(".") or patient_dir.name.lower() == "template":
@@ -323,6 +340,7 @@ def extract_dataset_features(
     output_csv=None,
     save_csv=True,
     verbose=True,
+    patient_folder=None,
 ):
     """
     Extract one feature row per patient/date from a patient/date/activity folder tree.
@@ -335,9 +353,12 @@ def extract_dataset_features(
     if not root.exists():
         raise FileNotFoundError(f"Dataset root not found: {root}")
 
-    folders = _iter_patient_date_dirs(root)
+    folders = _iter_patient_date_dirs(root, patient_folder=patient_folder)
     if verbose:
-        print(f"[INFO] Found {len(folders)} patient-date folders in {root}")
+        if patient_folder is None:
+            print(f"[INFO] Found {len(folders)} patient-date folders in {root}")
+        else:
+            print(f"[INFO] Found {len(folders)} date folders for patient folder {patient_folder}")
 
     rows = []
     for patient_id, date_str, date_dir in folders:

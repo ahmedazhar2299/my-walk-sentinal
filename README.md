@@ -20,14 +20,16 @@ pip install -r requirements-feature-pipeline.txt
 
 Run extraction:
 
+Single patient folder:
+
 ```bash
-env/bin/python extract_features.py --dataset-root Data --output-csv features_dataset.csv
+env/bin/python extract_features.py --dataset-root Data --patient-folder patient_77 --output-csv features_dataset_77.csv
 ```
 
-Quiet version:
+You can also pass a folder path directly to extract multiple patients feature set:
 
 ```bash
-env/bin/python extract_features.py --dataset-root Data --output-csv features_dataset.csv --quiet
+env/bin/python extract_features.py --dataset-root Data --output-csv features_dataset.csv --skip-checks
 ```
 
 Optional config override:
@@ -50,6 +52,7 @@ env/bin/python extract_features.py --dataset-root Data --output-csv features_dat
 ## Data Layout
 
 The extractor scans `Data/<patient_id>/<date>/...` and writes one row per patient/date.
+With `--patient-folder`, it scans all date folders under only that patient folder.
 
 It supports both flat files and nested synchronized files. Examples:
 
@@ -221,13 +224,4 @@ Skip checks with:
 
 ```bash
 env/bin/python extract_features.py --dataset-root Data --output-csv features_dataset.csv --skip-checks
-```
-
-## Notes
-
-If Matplotlib prints a cache warning, extraction can still complete. It means the default Matplotlib cache directory is not writable. To avoid the warning:
-
-```bash
-mkdir -p .matplotlib-cache
-MPLCONFIGDIR=.matplotlib-cache env/bin/python extract_features.py --dataset-root Data --output-csv features_dataset.csv
 ```

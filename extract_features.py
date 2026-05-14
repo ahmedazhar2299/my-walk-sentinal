@@ -15,6 +15,14 @@ def parse_args():
         description="Extract one-row-per-patient-date IMU features from activity CSV files."
     )
     parser.add_argument("--dataset-root", default="Data", help="Root folder containing patient/date folders.")
+    parser.add_argument(
+        "--patient-folder",
+        default=None,
+        help=(
+            "Optional single patient folder to process, e.g. Data/patient_111 or patient_111. "
+            "When provided, all date folders inside that patient folder are extracted."
+        ),
+    )
     parser.add_argument("--output-csv", default="features_dataset.csv", help="Output feature CSV path.")
     parser.add_argument("--config-json", default=None, help="Optional JSON file with config overrides.")
     parser.add_argument(
@@ -53,6 +61,7 @@ def main():
         output_csv=config.output_csv,
         save_csv=True,
         verbose=not args.quiet,
+        patient_folder=args.patient_folder,
     )
 
     if not args.skip_checks:
