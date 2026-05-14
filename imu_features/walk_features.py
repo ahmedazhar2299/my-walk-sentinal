@@ -482,7 +482,9 @@ def extract_walk_features(df, meta, config):
     out["walk_dominant_frequency"] = dominant_frequency(acc_stats, meta.fs_hz)
     out["walk_spectral_entropy"] = spectral_entropy(acc_stats, meta.fs_hz)
 
-    jerk_col = "useracc_jerk" if acc_source == "useracc_mag" else "acc_jerk"
+    jerk_col = "useracc_jerk" if acc_source == "useracc_mag" else "acc_gravity_removed_jerk"
+    if jerk_col not in df:
+        jerk_col = "acc_jerk"
     jerk = df[jerk_col].to_numpy(dtype=float)
     if np.any(walk_mask):
         jerk = jerk[walk_mask]

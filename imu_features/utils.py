@@ -809,10 +809,20 @@ def detect_threshold_turn_window(
     return start_t, end_t, float(end_t - start_t), mask
 
 
+def _has_usable_motion_signal(values):
+    values = np.asarray(values, dtype=float)
+    finite = values[np.isfinite(values)]
+    if len(finite) == 0:
+        return False
+    return bool(np.nanmax(np.abs(finite)) > 1e-8 and np.nanstd(finite) > 1e-8)
+
+
 def select_motion_acc_signal(df, prefer_useracc=True):
-    if prefer_useracc and "useracc_mag" in df and not np.all(np.isnan(df["useracc_mag"].to_numpy())):
+    if prefer_useracc and "useracc_mag" in df and _has_usable_motion_signal(df["useracc_mag"].to_numpy()):
         return df["useracc_mag"].to_numpy(dtype=float), "useracc_mag"
-    return df["acc_mag"].to_numpy(dtype=float), "acc_mag"
+    if "acc_mag_gravity_removed" in df:
+        return df["acc_mag_gravity_removed"].to_numpy(dtype=float), "acc_mag_gravity_removed"
+    return (df["acc_mag"].to_numpy(dtype=float) - np.nanmean(df["acc_mag"].to_numpy(dtype=float))), "acc_mag_gravity_removed"
 
 
 def select_turn_angular_signal(df, config, fs_hz):
@@ -882,7 +892,12 @@ def preprocess_activity_dataframe(df_raw, config):
                 order=config.filtering.order,
             )
 
+    df["acc_mag_gravity_removed"] = df["acc_mag"] - float(np.nanmean(df["acc_mag"]))
     df["acc_jerk"] = safe_gradient(df["acc_mag"].to_numpy(dtype=float), time_s)
+    df["acc_gravity_removed_jerk"] = safe_gradient(
+        df["acc_mag_gravity_removed"].to_numpy(dtype=float),
+        time_s,
+    )
     df["useracc_jerk"] = safe_gradient(df["useracc_mag"].to_numpy(dtype=float), time_s)
     df["gyro_jerk"] = safe_gradient(df["gyro_mag"].to_numpy(dtype=float), time_s)
 
@@ -947,7 +962,13 @@ def _recompute_meta_and_derived(df):
     duration_s = float(time_s[-1] - time_s[0]) if len(time_s) > 1 else 0.0
 
     if "acc_mag" in df:
+        df["acc_mag_gravity_removed"] = df["acc_mag"] - float(np.nanmean(df["acc_mag"]))
         df["acc_jerk"] = safe_gradient(df["acc_mag"].to_numpy(dtype=float), time_s)
+    if "acc_mag_gravity_removed" in df:
+        df["acc_gravity_removed_jerk"] = safe_gradient(
+            df["acc_mag_gravity_removed"].to_numpy(dtype=float),
+            time_s,
+        )
     if "useracc_mag" in df:
         df["useracc_jerk"] = safe_gradient(df["useracc_mag"].to_numpy(dtype=float), time_s)
     if "gyro_mag" in df:
@@ -998,8 +1019,8 @@ def resolve_activity_files(date_dir):
         "walk": ("walk", "10_mw"),
         "left_turn": ("left_turn", "360_leftturn", "turnl", "turn_l"),
         "right_turn": ("right_turn", "360_rightturn", "turnr", "turn_r"),
-        "sit_to_stand": ("sit_to_stand", "sit_stand"),
-        "stand_to_sit": ("stand_to_sit", "stand_sit"),
+        "sit_to_stand": ("sit_to_stand", "sit_stand", "sittostand", "sitstand"),
+        "stand_to_sit": ("stand_to_sit", "stand_sit", "standtosit", "standsit"),
     }
 
     def normalize(value):
@@ -1007,6 +1028,10 @@ def resolve_activity_files(date_dir):
         chars = [ch if ch.isalnum() else "_" for ch in text]
         normalized = "_".join("".join(chars).split("_"))
         return f"_{normalized}_"
+
+    def alias_matches(normalized_value, alias):
+        alias = str(alias).lower()
+        return f"_{alias}_" in normalized_value or f"_{alias}" in normalized_value
 
     csv_files = sorted(Path(date_dir).rglob("*.csv"))
     resolved = {}
@@ -1021,13 +1046,13 @@ def resolve_activity_files(date_dir):
         for path in csv_files:
             normalized_name = normalize(path.stem)
             normalized_rel = normalize(path.relative_to(date_dir))
-            if not any(f"_{alias}_" in normalized_rel for alias in aliases.get(activity, (activity,))):
+            if not any(alias_matches(normalized_rel, alias) for alias in aliases.get(activity, (activity,))):
                 continue
 
             score = 0
             if "synchronized" in normalized_rel:
                 score += 20
-            if any(f"_{alias}_" == normalized_name for alias in aliases.get(activity, (activity,))):
+            if any(alias_matches(normalized_name, alias) for alias in aliases.get(activity, (activity,))):
                 score += 10
             if activity in normalized_name:
                 score += 5

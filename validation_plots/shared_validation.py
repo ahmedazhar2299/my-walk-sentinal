@@ -107,8 +107,8 @@ ACTIVITY_ALIASES = {
     "walk": ["walk", "10_mw", "10mw", "1m", "1 meter"],
     "left_turn": ["left_turn", "left turn", "turnl", "turn l", "l_360", "360 left", "left"],
     "right_turn": ["right_turn", "right turn", "turnr", "turn r", "r_360", "360 right", "right"],
-    "sit_to_stand": ["sit_to_stand", "sit to stand", "sit_stand", "sitstand"],
-    "stand_to_sit": ["stand_to_sit", "stand to sit", "stand_sit", "standsit"],
+    "sit_to_stand": ["sit_to_stand", "sit to stand", "sit_stand", "sittostand", "sitstand"],
+    "stand_to_sit": ["stand_to_sit", "stand to sit", "stand_sit", "standtosit", "standsit"],
 }
 
 
@@ -208,12 +208,14 @@ def compute_time_seconds(df):
 
 
 def compute_acc_magnitude(df):
-    if "useracc_mag" in df and np.isfinite(df["useracc_mag"]).any():
-        return df["useracc_mag"].to_numpy(dtype=float), "useracc_mag"
+    acc, src = select_motion_acc_signal(df, PIPELINE_CONFIG.prefer_useracc_for_motion)
+    if np.isfinite(acc).any():
+        return acc, src
     if all(c in df for c in ["accel_x", "accel_y", "accel_z"]):
         m = np.sqrt(df["accel_x"]**2 + df["accel_y"]**2 + df["accel_z"]**2)
-        return m.to_numpy(dtype=float), "acc_mag"
-    return np.full(len(df), np.nan), "acc_mag"
+        m = m - float(np.nanmean(m))
+        return m.to_numpy(dtype=float), "acc_mag_gravity_removed"
+    return np.full(len(df), np.nan), "acc_mag_gravity_removed"
 
 
 def compute_gyro_magnitude(df):
@@ -985,15 +987,7 @@ def plot_turn_validation(activity_name, df, meta):
     turn_threshold, pause_threshold, turn_pp_starts, turn_pp = _turn_thresholds(ang, t, meta)
     start_t, end_t, duration_t, turn_mask = _turn_window_from_threshold(ang, t, turn_threshold)
 
-    if 'useracc_mag' in df and np.isfinite(df['useracc_mag'].to_numpy(dtype=float)).any():
-        acc_src = 'useracc_mag'
-        acc = df[acc_src].to_numpy(dtype=float)
-    elif 'acc_mag' in df and np.isfinite(df['acc_mag'].to_numpy(dtype=float)).any():
-        acc_src = 'acc_mag'
-        acc = df[acc_src].to_numpy(dtype=float)
-    else:
-        acc_src = 'useracc_mag'
-        acc = np.full(len(df), np.nan, dtype=float)
+    acc, acc_src = select_motion_acc_signal(df, PIPELINE_CONFIG.prefer_useracc_for_motion)
     acc_turn = np.array([], dtype=float)
     t_turn = np.array([], dtype=float)
     acc_turn_smooth = np.array([], dtype=float)
