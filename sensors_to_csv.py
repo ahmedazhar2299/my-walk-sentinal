@@ -32,6 +32,12 @@ OUTPUT_COLUMNS = [
     "Gyro_Z",
 ]
 SOURCE_COLUMNS = ["PacketCounter", "Acc_X", "Acc_Y", "Acc_Z", "Gyr_X", "Gyr_Y", "Gyr_Z"]
+SENSOR_PLACEMENT_BY_DEVICE_ID = {
+    "42760": "right",
+    "426CC": "left",
+    "4276D": "trunk",
+    "42660": "sacrum",
+}
 
 
 def choose_directory() -> Path | None:
@@ -206,16 +212,39 @@ def build_synchronized_frame(df: pd.DataFrame, duration_seconds: float) -> tuple
     return out[OUTPUT_COLUMNS], frequency_hz
 
 
-def output_path_for(txt_path: Path, input_dir: Path, output_dir: Path | None) -> Path:
+def output_root_for(input_dir: Path, output_dir: Path | None) -> Path:
     if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        return output_dir / f"{txt_path.stem}_synchronized.csv"
+        return output_dir
 
-    # Keep nested source structure if .txt files live in subfolders.
+    return input_dir.parent / f"{input_dir.name}_synchronized"
+
+
+def placement_for_file(txt_path: Path) -> str:
+    upper_name = txt_path.stem.upper()
+    for device_suffix, placement in SENSOR_PLACEMENT_BY_DEVICE_ID.items():
+        if upper_name.endswith(device_suffix.upper()) or f"_{device_suffix.upper()}" in upper_name:
+            return placement
+    return "unknown_sensor"
+
+
+def output_path_for(txt_path: Path, input_dir: Path, output_dir: Path | None) -> Path:
+    output_root = output_root_for(input_dir, output_dir)
+    placement = placement_for_file(txt_path)
+
     rel_parent = txt_path.parent.relative_to(input_dir)
-    target_dir = input_dir / "synchronized_csv" / rel_parent
+    target_dir = output_root / rel_parent / placement
     target_dir.mkdir(parents=True, exist_ok=True)
-    return target_dir / f"{txt_path.stem}_synchronized.csv"
+
+    target = target_dir / f"{txt_path.stem}_synchronized.csv"
+    if not target.exists():
+        return target
+
+    suffix = 1
+    while True:
+        candidate = target_dir / f"{txt_path.stem}_synchronized_{suffix}.csv"
+        if not candidate.exists():
+            return candidate
+        suffix += 1
 
 
 def convert_file(txt_path: Path, input_dir: Path, output_dir: Path | None, duration_seconds: float) -> dict[str, object]:
@@ -229,6 +258,7 @@ def convert_file(txt_path: Path, input_dir: Path, output_dir: Path | None, durat
     return {
         "source": str(txt_path),
         "output": str(out_path),
+        "placement": placement_for_file(txt_path),
         "rows": len(synced),
         "frequency_hz": frequency_hz,
         "packet_start": packet_start,
@@ -250,7 +280,7 @@ def convert_directory(input_dir: Path, output_dir: Path | None = None, duration_
     txt_files = find_txt_files(input_dir)
     summary: dict[str, object] = {
         "input_dir": str(input_dir),
-        "output_dir": str(output_dir) if output_dir else str(input_dir / "synchronized_csv"),
+        "output_dir": str(output_root_for(input_dir, output_dir)),
         "txt_files_found": len(txt_files),
         "converted": 0,
         "failed": 0,
@@ -270,6 +300,7 @@ def convert_directory(input_dir: Path, output_dir: Path | None = None, duration_
             print(
                 "[OK] Converted "
                 f"{txt_path.name} -> {result['output']} | "
+                f"placement={result['placement']} | "
                 f"rows={result['rows']} | freq={float(result['frequency_hz']):.3f} Hz | "
                 f"PacketCounter={result['packet_start']}..{result['packet_end']}"
             )
