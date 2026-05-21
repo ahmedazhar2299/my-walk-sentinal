@@ -10,11 +10,11 @@ from .utils import (
     detect_active_window,
     robust_p2p_threshold,
     dominant_frequency,
+    peak_step_summary,
     rms,
     select_motion_acc_signal,
     spectral_entropy,
     truncate_activity_dataframe,
-    wavelet_step_summary,
 )
 
 WALK_FEATURE_NAMES = [
@@ -387,11 +387,15 @@ def _walk_summary_for_features(time_s, acc_signal, meta, config):
     except Exception:
         pass
 
-    return wavelet_step_summary(
+    return peak_step_summary(
         time_s=time_s,
         signal=acc_signal,
-        wavelet_config=config.wavelet_steps,
-        fixed_window=False,
+        window_sec=config.window_gate.window_sec,
+        threshold_k=config.window_gate.walk_threshold_k,
+        fallback_min_amp=config.window_gate.walk_min_amp_threshold,
+        min_duration_s=config.window_gate.walk_min_duration_s,
+        smooth_sigma=1.0,
+        min_peak_distance_s=0.3,
     )
 
 
@@ -440,10 +444,15 @@ def extract_walk_features(df, meta, config):
     )
 
     step_time_mean = np.nan
-    active_cad = np.asarray(wavelet.get("cad", []), dtype=float)
-    active_cad = active_cad[np.isfinite(active_cad) & (active_cad > 0)]
-    if len(active_cad):
-        step_times = 1.0 / active_cad
+    peak_times = np.asarray(wavelet.get("peak_times", []), dtype=float)
+    peak_times = peak_times[np.isfinite(peak_times)]
+    if len(peak_times) >= 2:
+        step_times = np.diff(peak_times)
+    else:
+        active_cad = np.asarray(wavelet.get("cad", []), dtype=float)
+        active_cad = active_cad[np.isfinite(active_cad) & (active_cad > 0)]
+        step_times = 1.0 / active_cad if len(active_cad) else np.array([], dtype=float)
+    if len(step_times):
         step_time_mean = float(np.nanmean(step_times))
         step_time_std = float(np.nanstd(step_times))
         out["mean_step_time"] = step_time_mean

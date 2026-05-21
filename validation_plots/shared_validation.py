@@ -19,6 +19,7 @@ from imu_features.utils import (
     detect_peaks,
     detect_threshold_turn_window,
     estimate_sampling_interval_s,
+    peak_step_summary,
     robust_p2p_threshold,
     p2p_distribution_threshold,
     window_peak_to_peak,
@@ -732,53 +733,20 @@ def _compare_params(prefix):
 
 def exact_compare_walk_summary(t, acc, fs_hz, prefix='walk_compare'):
     params = _compare_params(prefix)
-    compare_fs = params["compare_fs"]
-    fallback_min_amp = params["fallback_min_amp"]
-    threshold_k = params["threshold_k"]
-    min_t_sec = params["min_t_sec"]
-    step_freq = params["step_freq"]
-    window_sec = params["window_sec"]
-    min_t = max(1, int(round(min_t_sec / max(window_sec, 1e-9))))
-    alpha = 0.6
-    beta = 2.5
-    delta = 20
-
-    t_res, vm_bout = _compare_preprocess_bout(t, acc, fs=compare_fs)
-    if len(vm_bout) < max(1, int(round(compare_fs * window_sec))):
-        return {'t_res': np.array([]), 'vm_bout': np.array([]), 'cad': np.array([]), 'dominant_freq_hz': np.array([]), 'pp': np.array([]), 'min_amp': fallback_min_amp, 'walk_mask': np.array([], dtype=bool), 'start_time_s': np.nan, 'end_time_s': np.nan, 'duration_s': np.nan, 'step_count': np.nan, 'cadence': np.nan, 'window_sec': window_sec}
-
-    pp = _compare_get_pp(vm_bout, compare_fs, window_sec=window_sec)
-    min_amp = p2p_distribution_threshold(pp, k=threshold_k, fallback=fallback_min_amp)
-    valid = np.ones(len(pp), dtype=bool)
-    valid[pp < min_amp] = False
-    cad = np.zeros(len(pp), dtype=float)
-    dominant_freq_hz = np.full(len(pp), np.nan, dtype=float)
-    if np.sum(valid) >= min_t:
-        tapered_bout = vm_bout[np.repeat(valid, max(1, int(round(compare_fs * window_sec))))]
-        freqs_interp, coefs_interp = _compare_compute_interpolate_cwt(tapered_bout, fs=compare_fs)
-        if coefs_interp.size:
-            dp = _compare_identify_peaks_in_cwt(freqs_interp, coefs_interp, compare_fs, window_sec=window_sec, step_freq=step_freq, alpha=alpha, beta=beta)
-            valid_peaks = np.zeros((dp.shape[0], len(valid)))
-            valid_peaks[:, valid] = dp
-            cont_peaks = _compare_find_continuous_dominant_peaks(valid_peaks, min_t=min_t, delta=delta)
-            for i in range(len(cad)):
-                ind_freqs = np.where(cont_peaks[:, i] > 0)[0]
-                if len(ind_freqs) > 0:
-                    dominant_freq_hz[i] = freqs_interp[ind_freqs[0]]
-                    cad[i] = freqs_interp[ind_freqs[0]]
-    walk_sec = cad > 0
-    if not np.any(walk_sec):
-        return {'t_res': t_res, 'vm_bout': vm_bout, 'cad': cad, 'dominant_freq_hz': dominant_freq_hz, 'pp': pp, 'min_amp': min_amp, 'walk_mask': walk_sec, 'start_time_s': np.nan, 'end_time_s': np.nan, 'duration_s': np.nan, 'step_count': 0.0, 'cadence': np.nan, 'window_sec': window_sec}
-    window_n = max(1, int(round(compare_fs * window_sec)))
-    first_sec = np.where(walk_sec)[0][0]
-    last_sec = np.where(walk_sec)[0][-1]
-    start_time = float(t_res[first_sec * window_n])
-    end_idx = min(len(t_res) - 1, (last_sec + 1) * window_n - 1)
-    end_time = float(t_res[end_idx])
-    duration = float(end_time - start_time)
-    step_count = float(np.nansum(cad[walk_sec]) * window_sec)
-    cadence = float(np.nanmean(cad[walk_sec]) * 60.0) if np.any(walk_sec) else np.nan
-    return {'t_res': t_res, 'vm_bout': vm_bout, 'cad': cad, 'dominant_freq_hz': dominant_freq_hz, 'pp': pp, 'min_amp': min_amp, 'walk_mask': walk_sec, 'start_time_s': start_time, 'end_time_s': end_time, 'duration_s': duration, 'step_count': step_count, 'cadence': cadence, 'window_sec': window_sec}
+    summary = peak_step_summary(
+        time_s=t,
+        signal=acc,
+        window_sec=params["window_sec"],
+        threshold_k=params["threshold_k"],
+        fallback_min_amp=params["fallback_min_amp"],
+        min_duration_s=float(PLOT_PARAMS.get("window_gate", {}).get("walk_min_duration_s", 1.0)),
+        smooth_sigma=1.0,
+        min_peak_distance_s=0.3,
+    )
+    summary["vm_bout"] = summary.get("signal_bout", np.array([], dtype=float))
+    summary["walk_mask"] = summary.get("active_mask", np.array([], dtype=bool))
+    summary["window_sec"] = params["window_sec"]
+    return summary
 
 
 def exact_compare_fixed_window_summary(t, acc, fs_hz, prefix='turn_compare'):
@@ -860,11 +828,18 @@ def plot_walk_validation(activity_name, df, meta):
     if len(compare_walk['t_res']):
         fig, ax1 = plt.subplots(figsize=(10, 4))
         ax1.plot(t, acc, color='steelblue', linewidth=1.5, label=src)
+        smoothed = np.asarray(compare_walk.get('smoothed_signal', []), dtype=float)
+        if len(smoothed) == len(compare_walk['t_res']):
+            ax1.plot(compare_walk['t_res'], smoothed, color='navy', linewidth=1.2, alpha=0.85, label=f'smoothed {src}')
+        peak_times = np.asarray(compare_walk.get('peak_times', []), dtype=float)
+        peak_values = np.asarray(compare_walk.get('peak_values', []), dtype=float)
+        if len(peak_times) == len(peak_values) and len(peak_times):
+            ax1.scatter(peak_times, peak_values, color='crimson', s=40, zorder=5, label=f'peaks={len(peak_times)}')
         if np.isfinite(start_t):
             ax1.axvline(start_t, color='green', ls='--', linewidth=1.5, label='start')
         if np.isfinite(end_t):
             ax1.axvline(end_t, color='gray', ls='--', linewidth=1.5, label='end')
-        ax1.set_title(f"{activity_name}: Wavelet Walking Comparison")
+        ax1.set_title(f"{activity_name}: find_peaks Walking Step Estimate")
         ax1.set_xlabel('Time (s)')
         ax1.set_ylabel('Acceleration Magnitude')
         ax1.grid(alpha=0.3)
@@ -878,14 +853,17 @@ def plot_walk_validation(activity_name, df, meta):
                 ax1.step(env_times, env_mid, where='post', color='crimson', linewidth=2.0, alpha=0.9, label='peak to peak')
         if np.isfinite(min_amp):
             ax1.axhline(min_amp, color='firebrick', linestyle='--', linewidth=1.6, alpha=0.9, label=f'threshold={min_amp:.2f}')
+        peak_threshold = float(compare_walk.get('peak_threshold', np.nan))
+        if np.isfinite(peak_threshold):
+            ax1.axhline(peak_threshold, color='purple', linestyle=':', linewidth=1.3, alpha=0.9, label=f'p2p peak threshold={peak_threshold:.2f}')
 
         ax2 = ax1.twinx()
         if len(compare_walk['cad']):
-            walk_window_n = max(1, int(round(int(PLOT_PARAMS.get('walk_compare_fs_hz', 10)) * float(PLOT_PARAMS.get('walk_compare_window_sec', 1.0)))))
-            sec_times = compare_walk['t_res'][::walk_window_n][:len(compare_walk['cad'])]
+            walk_window_sec = float(PLOT_PARAMS.get('walk_compare_window_sec', 1.0))
+            sec_times = float(t[0]) + np.arange(len(compare_walk['cad']), dtype=float) * walk_window_sec
             cad = np.asarray(compare_walk['cad'], dtype=float)
             if len(sec_times) == len(cad):
-                ax2.step(sec_times, cad, where='post', color='darkorange', linewidth=2.0, label='cadence (steps/s)')
+                ax2.step(sec_times, cad, where='post', color='darkorange', linewidth=2.0, label='peak count (steps/s)')
         ax2.set_ylabel('Cadence (steps/s)')
 
         lines1, labels1 = ax1.get_legend_handles_labels()
@@ -904,29 +882,24 @@ def plot_walk_validation(activity_name, df, meta):
         plt.show()
 
         if len(compare_walk['cad']):
-            walk_window_n = max(1, int(round(int(PLOT_PARAMS.get('walk_compare_fs_hz', 10)) * float(PLOT_PARAMS.get('walk_compare_window_sec', 1.0)))))
-            sec_times = compare_walk['t_res'][::walk_window_n][:len(compare_walk['cad'])]
-            freq_hz = np.asarray(compare_walk.get('dominant_freq_hz', []), dtype=float)
+            walk_window_sec = float(PLOT_PARAMS.get('walk_compare_window_sec', 1.0))
+            sec_times = float(t[0]) + np.arange(len(compare_walk['cad']), dtype=float) * walk_window_sec
+            peak_rate = np.asarray(compare_walk.get('cad', []), dtype=float)
             plt.figure(figsize=(10, 3.8))
-            if len(sec_times) == len(freq_hz):
-                freq_plot = np.where(np.isfinite(freq_hz), freq_hz, 0.0)
-                plt.step(sec_times, freq_plot, where='post', color='darkorange', linewidth=2.2, label='dominant wavelet frequency (Hz)')
-                active = np.isfinite(freq_hz) & (freq_hz > 0)
+            if len(sec_times) == len(peak_rate):
+                plt.step(sec_times, peak_rate, where='post', color='darkorange', linewidth=2.2, label='find_peaks count (steps/s)')
+                active = np.isfinite(peak_rate) & (peak_rate > 0)
                 if np.any(active):
-                    plt.scatter(sec_times[active], freq_hz[active], color='crimson', s=36, zorder=3, label='active frequency windows')
-            freq_band = PLOT_PARAMS.get('walk_compare_step_freq_hz', (0.8, 2.3))
-            if len(freq_band) == 2:
-                plt.axhline(float(freq_band[0]), color='firebrick', ls='--', linewidth=1.4, alpha=0.8, label=f'freq min={float(freq_band[0]):.2f} Hz')
-                plt.axhline(float(freq_band[1]), color='brown', ls=':', linewidth=1.4, alpha=0.8, label=f'freq max={float(freq_band[1]):.2f} Hz')
+                    plt.scatter(sec_times[active], peak_rate[active], color='crimson', s=36, zorder=3, label='windows with peaks')
             if np.isfinite(start_t):
                 plt.axvline(start_t, color='green', ls='--', linewidth=1.5, label='start')
             if np.isfinite(end_t):
                 plt.axvline(end_t, color='gray', ls='--', linewidth=1.5, label='end')
             if len(t):
                 plt.xlim(float(t[0]), float(t[-1]))
-            plt.title(f"{activity_name}: Wavelet Dominant Frequency by Window")
+            plt.title(f"{activity_name}: find_peaks Step Count by Window")
             plt.xlabel('Time (s)')
-            plt.ylabel('Frequency (Hz)')
+            plt.ylabel('Steps/s')
             plt.grid(alpha=0.3)
             plt.legend(loc='upper right', fontsize=7, framealpha=0.80, borderpad=0.25, labelspacing=0.25, handlelength=1.6)
             plt.show()

@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy import interpolate
+from scipy.ndimage import gaussian_filter1d
 from scipy.signal import butter, filtfilt, find_peaks, welch
 from scipy.signal.windows import tukey
 from scipy.stats import entropy as scipy_entropy
@@ -590,6 +591,132 @@ def wavelet_step_summary(time_s, signal, wavelet_config, fixed_window=False):
         "start_time_s": start_time_s,
         "end_time_s": end_time_s,
         "duration_s": duration_s,
+        "step_count": step_count,
+        "cadence": cadence,
+    }
+
+
+def peak_step_summary(
+    time_s,
+    signal,
+    window_sec=1.0,
+    threshold_k=1.0,
+    fallback_min_amp=0.3,
+    min_duration_s=1.0,
+    smooth_sigma=1.0,
+    min_peak_distance_s=0.3,
+):
+    """Detect a walking window with p2p thresholding, then count steps with find_peaks."""
+    time_s = np.asarray(time_s, dtype=float)
+    signal = np.asarray(signal, dtype=float)
+    empty = {
+        "t_res": np.array([], dtype=float),
+        "signal_bout": np.array([], dtype=float),
+        "smoothed_signal": np.array([], dtype=float),
+        "cad": np.array([], dtype=float),
+        "dominant_freq_hz": np.array([], dtype=float),
+        "pp": np.array([], dtype=float),
+        "min_amp": float(fallback_min_amp) if np.isfinite(fallback_min_amp) else np.nan,
+        "active_mask": np.array([], dtype=bool),
+        "peak_indices": np.array([], dtype=int),
+        "peak_times": np.array([], dtype=float),
+        "peak_values": np.array([], dtype=float),
+        "peak_threshold": np.nan,
+        "start_time_s": np.nan,
+        "end_time_s": np.nan,
+        "duration_s": np.nan,
+        "step_count": np.nan,
+        "cadence": np.nan,
+    }
+    if len(time_s) != len(signal) or len(time_s) < 3:
+        return empty
+
+    valid = np.isfinite(time_s) & np.isfinite(signal)
+    if valid.sum() < 3:
+        return empty
+
+    threshold, pp = robust_p2p_threshold(
+        time_s=time_s,
+        signal=signal,
+        window_sec=window_sec,
+        k=threshold_k,
+        fallback=fallback_min_amp,
+    )
+    start_t, end_t, duration, active_mask, min_amp = detect_active_window(
+        signal,
+        time_s,
+        min_duration_s=min_duration_s,
+        threshold=threshold,
+        window_sec=window_sec,
+    )
+    if not np.isfinite(start_t) or not np.isfinite(end_t) or not np.any(active_mask):
+        out = dict(empty)
+        out["pp"] = pp
+        out["min_amp"] = min_amp
+        out["step_count"] = 0.0
+        return out
+
+    t_win = time_s[active_mask]
+    sig_win = signal[active_mask]
+    finite_win = np.isfinite(t_win) & np.isfinite(sig_win)
+    t_win = t_win[finite_win]
+    sig_win = sig_win[finite_win]
+    if len(t_win) < 3:
+        out = dict(empty)
+        out.update(
+            {
+                "pp": pp,
+                "min_amp": min_amp,
+                "start_time_s": start_t,
+                "end_time_s": end_t,
+                "duration_s": duration,
+                "step_count": 0.0,
+            }
+        )
+        return out
+
+    fs_hz = 1.0 / estimate_sampling_interval_s(t_win) if len(t_win) > 2 else np.nan
+    if not np.isfinite(fs_hz) or fs_hz <= 0:
+        fs_hz = np.nan
+
+    smoothed = gaussian_filter1d(sig_win, sigma=float(smooth_sigma)) if np.isfinite(smooth_sigma) and smooth_sigma > 0 else sig_win.copy()
+    peak_threshold = float(min_amp)
+    min_distance = max(1, int(round(float(min_peak_distance_s) * fs_hz))) if np.isfinite(fs_hz) else 1
+    peaks = np.array([], dtype=int)
+    if np.isfinite(peak_threshold):
+        peaks, _ = find_peaks(smoothed, height=peak_threshold, distance=min_distance)
+    peak_times = t_win[peaks] if len(peaks) else np.array([], dtype=float)
+    peak_values = smoothed[peaks] if len(peaks) else np.array([], dtype=float)
+    step_count = float(len(peaks))
+    cadence = float((step_count / duration) * 60.0) if np.isfinite(duration) and duration > 0 else np.nan
+
+    starts, _ = window_peak_to_peak(time_s, signal, window_sec=window_sec)
+    cad = np.zeros(len(starts), dtype=float)
+    if len(starts):
+        for i, start in enumerate(starts):
+            end = start + window_sec
+            if i == len(starts) - 1:
+                count = np.sum((peak_times >= start) & (peak_times <= end))
+            else:
+                count = np.sum((peak_times >= start) & (peak_times < end))
+            cad[i] = float(count) / float(window_sec) if window_sec > 0 else 0.0
+
+    return {
+        "t_res": t_win,
+        "signal_bout": sig_win,
+        "smoothed_signal": smoothed,
+        "cad": cad,
+        "dominant_freq_hz": np.full(len(cad), np.nan, dtype=float),
+        "pp": pp,
+        "min_amp": min_amp,
+        "active_mask": active_mask,
+        "peak_indices": peaks,
+        "peak_times": peak_times,
+        "peak_values": peak_values,
+        "peak_threshold": peak_threshold,
+        "start_time_s": start_t,
+        "end_time_s": end_t,
+        "duration_s": duration,
         "step_count": step_count,
         "cadence": cadence,
     }
