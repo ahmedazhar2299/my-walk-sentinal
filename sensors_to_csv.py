@@ -32,6 +32,15 @@ OUTPUT_COLUMNS = [
     "Gyro_Z",
 ]
 SOURCE_COLUMNS = ["PacketCounter", "Acc_X", "Acc_Y", "Acc_Z", "Gyr_X", "Gyr_Y", "Gyr_Z"]
+SOURCE_COLUMN_ALIASES = {
+    "PacketCounter": ["PacketCounter", "Packet Counter"],
+    "Acc_X": ["Acc_X", "Acc_X(m/s^2)", "Accel_X", "Accelerometer_X"],
+    "Acc_Y": ["Acc_Y", "Acc_Y(m/s^2)", "Accel_Y", "Accelerometer_Y"],
+    "Acc_Z": ["Acc_Z", "Acc_Z(m/s^2)", "Accel_Z", "Accelerometer_Z"],
+    "Gyr_X": ["Gyr_X", "Gyr_X(rad/s)", "Gyro_X", "Gyroscope_X"],
+    "Gyr_Y": ["Gyr_Y", "Gyr_Y(rad/s)", "Gyro_Y", "Gyroscope_Y"],
+    "Gyr_Z": ["Gyr_Z", "Gyr_Z(rad/s)", "Gyro_Z", "Gyroscope_Z"],
+}
 SENSOR_PLACEMENT_BY_DEVICE_ID = {
     "42760": "right",
     "426CC": "left",
@@ -81,7 +90,7 @@ def choose_directory() -> Path | None:
         pass
 
     path_var = tk.StringVar(value=str(initial_dir))
-    status_var = tk.StringVar(value="Choose the folder that contains your Data_Sensors .txt files.")
+    status_var = tk.StringVar(value="Choose the folder that contains your Data_Sensors TXT or XSENS CSV files.")
 
     def remember_and_close(path: Path) -> None:
         nonlocal selected_path
@@ -98,7 +107,7 @@ def choose_directory() -> Path | None:
         root.focus_force()
         selected = filedialog.askdirectory(
             parent=root,
-            title="Select folder containing Data_Sensors .txt files",
+            title="Select folder containing Data_Sensors TXT or XSENS CSV files",
             mustexist=True,
             initialdir=path_var.get() or str(initial_dir),
         )
@@ -163,14 +172,42 @@ def choose_directory_with_fallback() -> Path | None:
         return path
 
 
-def read_sensor_txt(txt_path: Path) -> pd.DataFrame:
-    """Read an MT Manager text export and return only packet, accel, and gyro columns."""
-    df = pd.read_csv(txt_path, comment="/")
-    missing = [col for col in SOURCE_COLUMNS if col not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns {missing}. Available columns: {df.columns.tolist()}")
+def normalize_column_name(name: str) -> str:
+    return "".join(ch for ch in str(name).lower() if ch.isalnum())
 
-    df = df[SOURCE_COLUMNS].copy()
+
+def build_source_rename_map(columns: list[str]) -> dict[str, str]:
+    normalized_to_original = {normalize_column_name(col): col for col in columns}
+    rename_map = {}
+    missing = []
+
+    for canonical_col, aliases in SOURCE_COLUMN_ALIASES.items():
+        source_col = None
+        for alias in aliases:
+            source_col = normalized_to_original.get(normalize_column_name(alias))
+            if source_col is not None:
+                break
+        if source_col is None:
+            missing.append(canonical_col)
+        else:
+            rename_map[source_col] = canonical_col
+
+    if missing:
+        raise ValueError(f"Missing required columns {missing}. Available columns: {columns}")
+    return rename_map
+
+
+def read_sensor_file(sensor_path: Path) -> pd.DataFrame:
+    """Read an MT Manager TXT or XSENS CSV export and return packet, accel, and gyro columns."""
+    if sensor_path.suffix.lower() == ".txt":
+        df = pd.read_csv(sensor_path, comment="/")
+    elif sensor_path.suffix.lower() == ".csv":
+        df = pd.read_csv(sensor_path)
+    else:
+        raise ValueError(f"Unsupported sensor file type: {sensor_path.suffix}")
+
+    rename_map = build_source_rename_map(df.columns.tolist())
+    df = df.rename(columns=rename_map)[SOURCE_COLUMNS].copy()
     for col in SOURCE_COLUMNS:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -248,7 +285,7 @@ def output_path_for(txt_path: Path, input_dir: Path, output_dir: Path | None) ->
 
 
 def convert_file(txt_path: Path, input_dir: Path, output_dir: Path | None, duration_seconds: float) -> dict[str, object]:
-    df = read_sensor_txt(txt_path)
+    df = read_sensor_file(txt_path)
     synced, frequency_hz = build_synchronized_frame(df, duration_seconds)
     out_path = output_path_for(txt_path, input_dir, output_dir)
     synced.to_csv(out_path, index=False)
@@ -266,33 +303,39 @@ def convert_file(txt_path: Path, input_dir: Path, output_dir: Path | None, durat
     }
 
 
-def find_txt_files(input_dir: Path) -> list[Path]:
+def find_sensor_files(input_dir: Path) -> list[Path]:
     ignored_dirs = {"synchronized_csv", "__pycache__"}
     paths = []
-    for path in input_dir.rglob("*.txt"):
+    for path in input_dir.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in {".txt", ".csv"}:
+            continue
         if any(part.startswith(".") or part in ignored_dirs for part in path.relative_to(input_dir).parts):
+            continue
+        if any(part.endswith("_synchronized") for part in path.relative_to(input_dir).parts):
+            continue
+        if path.name.lower().endswith("_synchronized.csv"):
             continue
         paths.append(path)
     return sorted(paths)
 
 
 def convert_directory(input_dir: Path, output_dir: Path | None = None, duration_seconds: float = DEFAULT_DURATION_SECONDS) -> dict[str, object]:
-    txt_files = find_txt_files(input_dir)
+    sensor_files = find_sensor_files(input_dir)
     summary: dict[str, object] = {
         "input_dir": str(input_dir),
         "output_dir": str(output_root_for(input_dir, output_dir)),
-        "txt_files_found": len(txt_files),
+        "sensor_files_found": len(sensor_files),
         "converted": 0,
         "failed": 0,
         "outputs": [],
         "errors": [],
     }
 
-    if not txt_files:
-        print(f"[WARNING] No .txt files found under: {input_dir}")
+    if not sensor_files:
+        print(f"[WARNING] No .txt or XSENS .csv files found under: {input_dir}")
         return summary
 
-    for txt_path in txt_files:
+    for txt_path in sensor_files:
         try:
             result = convert_file(txt_path, input_dir, output_dir, duration_seconds)
             summary["converted"] = int(summary["converted"]) + 1
@@ -313,16 +356,16 @@ def convert_directory(input_dir: Path, output_dir: Path | None = None, duration_
             print(traceback.format_exc())
 
     print("[INFO] Conversion summary:")
-    for key in ["input_dir", "output_dir", "txt_files_found", "converted", "failed"]:
+    for key in ["input_dir", "output_dir", "sensor_files_found", "converted", "failed"]:
         print(f"  - {key}: {summary[key]}")
     return summary
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Convert Data_Sensors .txt files to synchronized-style CSV files."
+        description="Convert Data_Sensors TXT or XSENS CSV files to synchronized-style CSV files."
     )
-    parser.add_argument("--input-dir", type=Path, default=None, help="Folder containing .txt sensor files.")
+    parser.add_argument("--input-dir", type=Path, default=None, help="Folder containing TXT or XSENS CSV sensor files.")
     parser.add_argument("--output-dir", type=Path, default=None, help="Optional output folder.")
     parser.add_argument(
         "--duration-seconds",
@@ -361,7 +404,7 @@ def main() -> None:
     message = (
         f"Input: {summary['input_dir']}\n"
         f"Output: {summary['output_dir']}\n\n"
-        f"TXT files found: {summary['txt_files_found']}\n"
+        f"Sensor files found: {summary['sensor_files_found']}\n"
         f"Converted: {summary['converted']}\n"
         f"Failed: {summary['failed']}"
     )
