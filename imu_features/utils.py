@@ -605,6 +605,7 @@ def peak_step_summary(
     min_duration_s=1.0,
     smooth_sigma=1.0,
     min_peak_distance_s=0.3,
+    peak_prominence_scale=0.0,
 ):
     """Detect a walking window with p2p thresholding, then count steps with find_peaks."""
     time_s = np.asarray(time_s, dtype=float)
@@ -684,7 +685,15 @@ def peak_step_summary(
     min_distance = max(1, int(round(float(min_peak_distance_s) * fs_hz))) if np.isfinite(fs_hz) else 1
     peaks = np.array([], dtype=int)
     if np.isfinite(peak_threshold):
-        peaks, _ = find_peaks(smoothed, height=peak_threshold, distance=min_distance)
+        peak_kwargs = {"height": peak_threshold, "distance": min_distance}
+        if (
+            np.isfinite(peak_prominence_scale)
+            and peak_prominence_scale > 0
+            and np.isfinite(min_amp)
+            and min_amp > 0
+        ):
+            peak_kwargs["prominence"] = float(peak_prominence_scale) * float(min_amp)
+        peaks, _ = find_peaks(smoothed, **peak_kwargs)
     peak_times = t_win[peaks] if len(peaks) else np.array([], dtype=float)
     peak_values = smoothed[peaks] if len(peaks) else np.array([], dtype=float)
     step_count = float(len(peaks))
