@@ -8,6 +8,7 @@ from .utils import (
     detect_active_window,
     robust_p2p_threshold,
     detect_peaks,
+    mask_close_gaps,
     rms,
     safe_gradient,
     select_motion_acc_signal,
@@ -125,7 +126,51 @@ def _dominant_gyro_axis(df, mask):
     return best_axis
 
 
-def transition_flexion_extension_peaks(df, meta, config):
+def _strongest_motion_region_mask(time_s, signal, base_mask, threshold, fs_hz, min_duration_s):
+    time_s = np.asarray(time_s, dtype=float)
+    signal = np.asarray(signal, dtype=float)
+    base_mask = np.asarray(base_mask, dtype=bool)
+    if len(time_s) == 0 or len(signal) != len(time_s) or len(base_mask) != len(time_s):
+        return base_mask
+    if not np.isfinite(threshold):
+        return base_mask
+
+    active = base_mask & np.isfinite(signal) & (np.abs(signal) >= threshold)
+    if np.isfinite(fs_hz) and fs_hz > 0:
+        active = mask_close_gaps(active, max_gap_samples=max(1, int(round(0.75 * fs_hz))))
+        min_samples = max(1, int(round(float(min_duration_s) * fs_hz)))
+    else:
+        min_samples = 1
+
+    best = None
+    best_score = -np.inf
+    i = 0
+    n = len(active)
+    while i < n:
+        if not active[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and active[j]:
+            j += 1
+        if (j - i) >= min_samples:
+            values = signal[i:j]
+            if np.isfinite(values).any():
+                score = float(np.nanmax(values) - np.nanmin(values))
+                if score > best_score:
+                    best_score = score
+                    best = (i, j - 1)
+        i = j
+
+    if best is None:
+        return base_mask
+
+    region = np.zeros(len(active), dtype=bool)
+    region[best[0] : best[1] + 1] = True
+    return region & base_mask & np.isfinite(signal)
+
+
+def transition_flexion_extension_peaks(df, meta, config, truncate=True, peak_anchor_window=False):
     """Return flexion/extension peak details from the dominant signed gyro axis."""
     empty = {
         "start_time_s": np.nan,
@@ -144,8 +189,9 @@ def transition_flexion_extension_peaks(df, meta, config):
     if df is None or meta is None or len(df) < config.min_rows_per_activity:
         return empty
 
-    activity = "sit_to_stand"
-    df, meta = truncate_activity_dataframe(df, meta, activity)
+    if truncate:
+        activity = "sit_to_stand"
+        df, meta = truncate_activity_dataframe(df, meta, activity)
     time_s = df["time_s"].to_numpy(dtype=float)
     gyro_mag = df["gyro_mag"].to_numpy(dtype=float)
     prelim_start_t, prelim_end_t, prelim_duration, prelim_mask, prelim_threshold = _transition_window(
@@ -185,6 +231,15 @@ def transition_flexion_extension_peaks(df, meta, config):
         peak_search_mask = prelim_mask & np.isfinite(gyro_signal)
     if not np.any(peak_search_mask):
         peak_search_mask = np.isfinite(gyro_signal)
+    if peak_anchor_window:
+        peak_search_mask = _strongest_motion_region_mask(
+            time_s,
+            gyro_signal,
+            peak_search_mask,
+            threshold,
+            meta.fs_hz,
+            config.window_gate.transition_min_duration_s,
+        )
 
     peak_idx = np.where(peak_search_mask)[0]
     flex_global_idx = None
@@ -196,16 +251,45 @@ def transition_flexion_extension_peaks(df, meta, config):
             ext_global_idx = int(peak_idx[int(np.nanargmin(gyro_for_peaks))])
 
     if flex_global_idx is not None and ext_global_idx is not None and np.isfinite(threshold):
+        first_motion_peak_idx = min(flex_global_idx, ext_global_idx)
         last_motion_peak_idx = max(flex_global_idx, ext_global_idx)
-        search_idx = peak_idx[peak_idx > last_motion_peak_idx]
-        below_idx = search_idx[
-            np.isfinite(gyro_signal[search_idx]) & (np.abs(gyro_signal[search_idx]) < threshold)
-        ]
-        if len(below_idx):
-            end_idx = int(below_idx[0])
+        if peak_anchor_window:
+            finite_abs = np.isfinite(gyro_signal) & np.isfinite(time_s)
+
+            before_idx = np.where(
+                finite_abs[: first_motion_peak_idx + 1]
+                & (np.abs(gyro_signal[: first_motion_peak_idx + 1]) < threshold)
+            )[0]
+            if len(before_idx):
+                start_idx = int(before_idx[-1])
+            else:
+                active_before_idx = np.where(finite_abs[: first_motion_peak_idx + 1])[0]
+                start_idx = int(active_before_idx[0]) if len(active_before_idx) else first_motion_peak_idx
+
+            after_candidates = np.arange(last_motion_peak_idx, len(gyro_signal))
+            below_after = after_candidates[
+                finite_abs[after_candidates] & (np.abs(gyro_signal[after_candidates]) < threshold)
+            ]
+            if len(below_after):
+                end_idx = int(below_after[0])
+            else:
+                active_after_idx = np.where(finite_abs[last_motion_peak_idx:])[0]
+                end_idx = int(last_motion_peak_idx + active_after_idx[-1]) if len(active_after_idx) else last_motion_peak_idx
+
+            start_t = float(time_s[start_idx])
             end_t = float(time_s[end_idx])
-            duration = float(end_t - start_t) if np.isfinite(start_t) else np.nan
+            duration = float(end_t - start_t)
             transition_mask = (time_s >= start_t) & (time_s <= end_t) & np.isfinite(gyro_signal)
+        else:
+            search_idx = peak_idx[peak_idx > last_motion_peak_idx]
+            below_idx = search_idx[
+                np.isfinite(gyro_signal[search_idx]) & (np.abs(gyro_signal[search_idx]) < threshold)
+            ]
+            if len(below_idx):
+                end_idx = int(below_idx[0])
+                end_t = float(time_s[end_idx])
+                duration = float(end_t - start_t) if np.isfinite(start_t) else np.nan
+                transition_mask = (time_s >= start_t) & (time_s <= end_t) & np.isfinite(gyro_signal)
 
     details = {
         "start_time_s": start_t,
@@ -234,19 +318,26 @@ def transition_flexion_extension_peaks(df, meta, config):
     return details
 
 
-def extract_transition_features(df, meta, config, prefix):
+def extract_transition_features(df, meta, config, prefix, truncate=True, peak_anchor_window=False):
     """Extract sit-to-stand or stand-to-sit transition features."""
     names = transition_feature_names(prefix)
     if df is None or meta is None or len(df) < config.min_rows_per_activity:
         return build_nan_feature_dict(names)
 
-    df, meta = truncate_activity_dataframe(df, meta, prefix)
+    if truncate:
+        df, meta = truncate_activity_dataframe(df, meta, prefix)
     out = build_nan_feature_dict(names)
     time_s = df["time_s"].to_numpy(dtype=float)
     acc_signal, _ = select_motion_acc_signal(df, config.prefer_useracc_for_motion)
     gyro_signal = df["gyro_mag"].to_numpy(dtype=float)
 
-    flex_ext = transition_flexion_extension_peaks(df, meta, config)
+    flex_ext = transition_flexion_extension_peaks(
+        df,
+        meta,
+        config,
+        truncate=False,
+        peak_anchor_window=peak_anchor_window,
+    )
     duration = flex_ext.get("duration_s", np.nan)
     transition_mask = flex_ext.get("transition_mask", np.zeros(len(df), dtype=bool))
     out[f"{prefix}_duration"] = duration
