@@ -17,7 +17,7 @@ except Exception:
     messagebox = None
 
 
-DEFAULT_DURATION_SECONDS = 60.0
+DEFAULT_SAMPLING_FREQUENCY_HZ = 100.0
 LAST_DIR_FILE = Path(__file__).resolve().parent / ".data_sensors_last_dir"
 OUTPUT_COLUMNS = [
     "Timestamp",
@@ -218,23 +218,21 @@ def read_sensor_file(sensor_path: Path) -> pd.DataFrame:
     return df
 
 
-def build_synchronized_frame(df: pd.DataFrame, duration_seconds: float) -> tuple[pd.DataFrame, float]:
+def build_synchronized_frame(df: pd.DataFrame, sampling_frequency_hz: float) -> tuple[pd.DataFrame, float]:
     """
     Generate synchronized-style rows.
 
-    The exports represent roughly one minute of data, so frequency is estimated as N / 60.
-    PacketCounter is used as the reference so packet gaps are reflected in generated time.
+    XSENS data is sampled at a fixed frequency. PacketCounter is used as the
+    reference so packet gaps are reflected in generated time.
     """
-    if duration_seconds <= 0:
-        raise ValueError("duration_seconds must be greater than zero.")
+    if sampling_frequency_hz <= 0:
+        raise ValueError("sampling_frequency_hz must be greater than zero.")
 
-    row_count = len(df)
-    frequency_hz = row_count / duration_seconds
     first_packet = df["PacketCounter"].iloc[0]
 
     out = pd.DataFrame(
         {
-            "Timestamp": (df["PacketCounter"] - first_packet) / frequency_hz,
+            "Timestamp": (df["PacketCounter"] - first_packet) / sampling_frequency_hz,
             "Accel_X": df["Acc_X"],
             "Accel_Y": df["Acc_Y"],
             "Accel_Z": df["Acc_Z"],
@@ -246,7 +244,7 @@ def build_synchronized_frame(df: pd.DataFrame, duration_seconds: float) -> tuple
             "Gyro_Z": df["Gyr_Z"],
         }
     )
-    return out[OUTPUT_COLUMNS], frequency_hz
+    return out[OUTPUT_COLUMNS], sampling_frequency_hz
 
 
 def output_root_for(input_dir: Path, output_dir: Path | None) -> Path:
@@ -284,20 +282,22 @@ def output_path_for(txt_path: Path, input_dir: Path, output_dir: Path | None) ->
         suffix += 1
 
 
-def convert_file(txt_path: Path, input_dir: Path, output_dir: Path | None, duration_seconds: float) -> dict[str, object]:
+def convert_file(txt_path: Path, input_dir: Path, output_dir: Path | None, sampling_frequency_hz: float) -> dict[str, object]:
     df = read_sensor_file(txt_path)
-    synced, frequency_hz = build_synchronized_frame(df, duration_seconds)
+    synced, frequency_hz = build_synchronized_frame(df, sampling_frequency_hz)
     out_path = output_path_for(txt_path, input_dir, output_dir)
     synced.to_csv(out_path, index=False)
 
     packet_start = int(df["PacketCounter"].iloc[0])
     packet_end = int(df["PacketCounter"].iloc[-1])
+    duration_seconds = len(synced) / frequency_hz
     return {
         "source": str(txt_path),
         "output": str(out_path),
         "placement": placement_for_file(txt_path),
         "rows": len(synced),
         "frequency_hz": frequency_hz,
+        "duration_seconds": duration_seconds,
         "packet_start": packet_start,
         "packet_end": packet_end,
     }
@@ -319,7 +319,11 @@ def find_sensor_files(input_dir: Path) -> list[Path]:
     return sorted(paths)
 
 
-def convert_directory(input_dir: Path, output_dir: Path | None = None, duration_seconds: float = DEFAULT_DURATION_SECONDS) -> dict[str, object]:
+def convert_directory(
+    input_dir: Path,
+    output_dir: Path | None = None,
+    sampling_frequency_hz: float = DEFAULT_SAMPLING_FREQUENCY_HZ,
+) -> dict[str, object]:
     sensor_files = find_sensor_files(input_dir)
     summary: dict[str, object] = {
         "input_dir": str(input_dir),
@@ -337,7 +341,7 @@ def convert_directory(input_dir: Path, output_dir: Path | None = None, duration_
 
     for txt_path in sensor_files:
         try:
-            result = convert_file(txt_path, input_dir, output_dir, duration_seconds)
+            result = convert_file(txt_path, input_dir, output_dir, sampling_frequency_hz)
             summary["converted"] = int(summary["converted"]) + 1
             summary["outputs"].append(result)  # type: ignore[union-attr]
             print(
@@ -345,6 +349,7 @@ def convert_directory(input_dir: Path, output_dir: Path | None = None, duration_
                 f"{txt_path.name} -> {result['output']} | "
                 f"placement={result['placement']} | "
                 f"rows={result['rows']} | freq={float(result['frequency_hz']):.3f} Hz | "
+                f"duration={float(result['duration_seconds']):.3f}s | "
                 f"PacketCounter={result['packet_start']}..{result['packet_end']}"
             )
         except Exception as exc:
@@ -368,10 +373,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input-dir", type=Path, default=None, help="Folder containing TXT or XSENS CSV sensor files.")
     parser.add_argument("--output-dir", type=Path, default=None, help="Optional output folder.")
     parser.add_argument(
-        "--duration-seconds",
+        "--sampling-frequency-hz",
         type=float,
-        default=DEFAULT_DURATION_SECONDS,
-        help="Recording duration used to estimate frequency. Defaults to 60.",
+        default=DEFAULT_SAMPLING_FREQUENCY_HZ,
+        help="Fixed sampling frequency used to generate timestamps. Defaults to 100 Hz.",
     )
     parser.add_argument(
         "--no-pause",
@@ -393,7 +398,7 @@ def main() -> None:
 
     try:
         output_dir = args.output_dir.resolve() if args.output_dir else None
-        summary = convert_directory(input_dir, output_dir, args.duration_seconds)
+        summary = convert_directory(input_dir, output_dir, args.sampling_frequency_hz)
     except Exception:
         print("[ERROR] Conversion failed before completion.")
         print(traceback.format_exc())
