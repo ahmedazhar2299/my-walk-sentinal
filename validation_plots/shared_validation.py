@@ -54,6 +54,7 @@ def default_plot_params():
         "turn_compare_window_sec": 1.0,
         "window_gate": {
             "window_sec": 1.0,
+            "p2p_cap_scale": 0.3,
             "walk_min_amp_threshold": 0.30,
             "walk_threshold_k": 1.0,
             "turn_min_amp_threshold": 0.10,
@@ -78,6 +79,7 @@ def plot_params_from_config(config):
     params["pause_min_duration_beta"] = float(config.turn_pause.adaptive_beta)
     params["window_gate"] = {
         "window_sec": float(config.window_gate.window_sec),
+        "p2p_cap_scale": config.window_gate.p2p_cap_scale,
         "walk_min_amp_threshold": float(config.window_gate.walk_min_amp_threshold),
         "walk_threshold_k": float(config.window_gate.walk_threshold_k),
         "walk_min_duration_s": float(config.window_gate.walk_min_duration_s),
@@ -742,6 +744,7 @@ def exact_compare_walk_summary(t, acc, fs_hz, prefix='walk_compare'):
         min_duration_s=float(PLOT_PARAMS.get("window_gate", {}).get("walk_min_duration_s", 1.0)),
         smooth_sigma=1.0,
         min_peak_distance_s=0.3,
+        p2p_cap_scale=PLOT_PARAMS.get("window_gate", {}).get("p2p_cap_scale", 0.3),
     )
     summary["vm_bout"] = summary.get("signal_bout", np.array([], dtype=float))
     summary["walk_mask"] = summary.get("active_mask", np.array([], dtype=bool))
@@ -767,7 +770,12 @@ def exact_compare_fixed_window_summary(t, acc, fs_hz, prefix='turn_compare'):
         return {'t_res': np.array([]), 'vm_bout': np.array([]), 'cad': np.array([]), 'dominant_freq_hz': np.array([]), 'pp': np.array([]), 'min_amp': fallback_min_amp, 'walk_mask': np.array([], dtype=bool), 'start_time_s': np.nan, 'end_time_s': np.nan, 'duration_s': np.nan, 'step_count': np.nan, 'cadence': np.nan, 'window_sec': window_sec}
 
     pp = _compare_get_pp(vm_bout, compare_fs, window_sec=window_sec)
-    min_amp = p2p_distribution_threshold(pp, k=threshold_k, fallback=fallback_min_amp)
+    min_amp = p2p_distribution_threshold(
+        pp,
+        k=threshold_k,
+        fallback=fallback_min_amp,
+        cap_scale=PLOT_PARAMS.get("window_gate", {}).get("p2p_cap_scale", 0.3),
+    )
     valid = np.ones(len(pp), dtype=bool)
     valid[pp < min_amp] = False
     cad = np.zeros(len(pp), dtype=float)
@@ -804,6 +812,7 @@ def _turn_thresholds(ang, t, meta):
         window_sec=gate_cfg.window_sec,
         k=getattr(gate_cfg, 'turn_threshold_k', 1.0),
         fallback=gate_cfg.turn_min_amp_threshold,
+        cap_scale=getattr(gate_cfg, "p2p_cap_scale", 0.3),
     )
     return float(turn_threshold), float(turn_threshold), pp_starts, pp
 

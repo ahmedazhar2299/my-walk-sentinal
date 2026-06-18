@@ -45,6 +45,7 @@ def _transition_window(time_s, signal, config):
         window_sec=config.window_gate.window_sec,
         k=config.window_gate.transition_threshold_k,
         fallback=config.window_gate.transition_min_amp_threshold,
+        cap_scale=config.window_gate.p2p_cap_scale,
     )
     return detect_active_window(
         signal=signal,
@@ -55,7 +56,7 @@ def _transition_window(time_s, signal, config):
     )
 
 
-def _median_mad_threshold(values, k, fallback=np.nan):
+def _median_mad_threshold(values, k, fallback=np.nan, cap_scale=0.3):
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
     if len(values) == 0:
@@ -64,8 +65,14 @@ def _median_mad_threshold(values, k, fallback=np.nan):
     mad = float(np.nanmedian(np.abs(values - median)))
     threshold = median + float(k) * mad
     max_value = float(np.nanmax(values))
-    if np.isfinite(max_value) and max_value > 0:
-        threshold = min(threshold, 0.3 * max_value)
+    if (
+        cap_scale is not None
+        and np.isfinite(cap_scale)
+        and float(cap_scale) > 0
+        and np.isfinite(max_value)
+        and max_value > 0
+    ):
+        threshold = min(threshold, float(cap_scale) * max_value)
     if not np.isfinite(threshold):
         threshold = float(fallback) if np.isfinite(fallback) else np.nan
     return float(threshold)
@@ -85,6 +92,7 @@ def _refine_window_from_abs_signal(time_s, signal, broad_mask, config):
         abs_signal[broad_mask],
         k=config.window_gate.transition_threshold_k,
         fallback=config.window_gate.transition_min_amp_threshold,
+        cap_scale=config.window_gate.p2p_cap_scale,
     )
     active_mask = broad_mask & np.isfinite(abs_signal) & np.isfinite(threshold) & (abs_signal >= threshold)
     if not np.any(active_mask):

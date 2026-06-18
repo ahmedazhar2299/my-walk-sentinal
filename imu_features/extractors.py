@@ -227,6 +227,7 @@ def _turn_xcorr_data_from_activity(activity_data, config, verbose):
             window_sec=turn_window_sec,
             k=config.window_gate.turn_threshold_k,
             fallback=config.window_gate.turn_min_amp_threshold,
+            cap_scale=config.window_gate.p2p_cap_scale,
         )
         start_t, end_t, _, _ = detect_threshold_turn_window(
             angular_signal_abs=angular_abs,

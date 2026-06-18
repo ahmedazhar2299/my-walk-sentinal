@@ -396,6 +396,7 @@ def _walk_summary_for_features(time_s, acc_signal, meta, config):
         min_duration_s=config.window_gate.walk_min_duration_s,
         smooth_sigma=1.0,
         min_peak_distance_s=0.3,
+        p2p_cap_scale=config.window_gate.p2p_cap_scale,
     )
 
 
@@ -425,6 +426,7 @@ def extract_walk_features(df, meta, config):
             window_sec=config.window_gate.window_sec,
             k=config.window_gate.walk_threshold_k,
             fallback=config.window_gate.walk_min_amp_threshold,
+            cap_scale=config.window_gate.p2p_cap_scale,
         )
         start_t, end_t, duration, walk_mask, _ = detect_active_window(
             acc_signal,

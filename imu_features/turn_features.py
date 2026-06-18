@@ -82,6 +82,7 @@ def extract_turn_features(df, meta, config, prefix):
         window_sec=turn_window_sec,
         k=config.window_gate.turn_threshold_k,
         fallback=config.window_gate.turn_min_amp_threshold,
+        cap_scale=config.window_gate.p2p_cap_scale,
     )
     pause_threshold = turn_threshold
 

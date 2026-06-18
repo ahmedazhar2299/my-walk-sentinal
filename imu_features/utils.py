@@ -294,7 +294,7 @@ def window_peak_to_peak(time_s, signal, window_sec=1.0):
     return np.asarray(starts, dtype=float), np.asarray(pp, dtype=float)
 
 
-def p2p_distribution_threshold(pp, k=1.0, fallback=np.nan):
+def p2p_distribution_threshold(pp, k=1.0, fallback=np.nan, cap_scale=0.3):
     pp = np.asarray(pp, dtype=float)
     valid_pp = pp[np.isfinite(pp)]
     if len(valid_pp) == 0:
@@ -303,15 +303,16 @@ def p2p_distribution_threshold(pp, k=1.0, fallback=np.nan):
     median_pp = float(np.nanmedian(valid_pp))
     mad_pp = float(np.nanmedian(np.abs(valid_pp - median_pp)))
     threshold = median_pp + float(k) * mad_pp
-    threshold = min(threshold, 0.3 * float(np.nanmax(valid_pp)))
+    if cap_scale is not None and np.isfinite(cap_scale) and float(cap_scale) > 0:
+        threshold = min(threshold, float(cap_scale) * float(np.nanmax(valid_pp)))
     if not np.isfinite(threshold):
         threshold = float(fallback) if np.isfinite(fallback) else np.nan
     return float(threshold)
 
 
-def robust_p2p_threshold(time_s, signal, window_sec=1.0, k=1.0, fallback=np.nan):
+def robust_p2p_threshold(time_s, signal, window_sec=1.0, k=1.0, fallback=np.nan, cap_scale=0.3):
     _, pp = window_peak_to_peak(time_s, signal, window_sec=window_sec)
-    threshold = p2p_distribution_threshold(pp, k=k, fallback=fallback)
+    threshold = p2p_distribution_threshold(pp, k=k, fallback=fallback, cap_scale=cap_scale)
     return float(threshold), pp
 
 
@@ -502,6 +503,7 @@ def wavelet_step_summary(time_s, signal, wavelet_config, fixed_window=False):
         )
     )
     threshold_k = float(getattr(wavelet_config, "walk_threshold_k", 1.0))
+    p2p_cap_scale = getattr(wavelet_config, "p2p_cap_scale", 0.3)
     min_t = int(wavelet_config.min_active_windows)
     step_freq = (
         float(wavelet_config.step_freq_min_hz),
@@ -526,7 +528,12 @@ def wavelet_step_summary(time_s, signal, wavelet_config, fixed_window=False):
         }
 
     pp = np.ptp(signal_bout.reshape((compare_fs, -1), order="F"), axis=0)
-    min_amp = p2p_distribution_threshold(pp, k=threshold_k, fallback=fallback_min_amp)
+    min_amp = p2p_distribution_threshold(
+        pp,
+        k=threshold_k,
+        fallback=fallback_min_amp,
+        cap_scale=p2p_cap_scale,
+    )
     valid = np.ones(len(pp), dtype=bool)
     valid[pp < min_amp] = False
     cad = np.zeros(len(pp), dtype=float)
@@ -606,6 +613,7 @@ def peak_step_summary(
     smooth_sigma=1.0,
     min_peak_distance_s=0.3,
     peak_prominence_scale=0.0,
+    p2p_cap_scale=0.3,
 ):
     """Detect a walking window with p2p thresholding, then count steps with find_peaks."""
     time_s = np.asarray(time_s, dtype=float)
@@ -642,6 +650,7 @@ def peak_step_summary(
         window_sec=window_sec,
         k=threshold_k,
         fallback=fallback_min_amp,
+        cap_scale=p2p_cap_scale,
     )
     start_t, end_t, duration, active_mask, min_amp = detect_active_window(
         signal,

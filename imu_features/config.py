@@ -47,6 +47,7 @@ class TurnPauseConfig:
 class WindowGateConfig:
     window_sec: float = 1.0
     turn_window_sec: float = 0.4
+    p2p_cap_scale: float | None = 0.3  # set None to disable median + K*MAD cap
     walk_min_amp_threshold: float = 0.3  # fallback only if robust p2p threshold cannot be computed
     walk_threshold_k: float = 1.0
     turn_min_amp_threshold: float = 0.1  # fallback only if robust p2p threshold cannot be computed
