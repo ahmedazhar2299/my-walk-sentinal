@@ -12,3 +12,4 @@ project_filebrowser.db
 /Scrapper
 .env
 .data_*
+*.log
