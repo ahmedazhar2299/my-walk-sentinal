@@ -178,6 +178,15 @@ def recorded_date(recorded_time: str) -> str:
 def normalize_recorded_time(recorded_time: str) -> str:
     """Normalize common portal timestamp variants before parsing."""
     text = " ".join(recorded_time.split())
+    text = re.sub(r"\bSept\.", "Sep", text, flags=re.I)
+    text = re.sub(
+        r"\b(Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.",
+        r"\1",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(r",\s*noon\b", ", 12 PM", text, flags=re.I)
+    text = re.sub(r",\s*midnight\b", ", 12 AM", text, flags=re.I)
     text = re.sub(r"\ba\.m\.", "AM", text, flags=re.I)
     text = re.sub(r"\bp\.m\.", "PM", text, flags=re.I)
     text = re.sub(r"\bam\b", "AM", text, flags=re.I)
