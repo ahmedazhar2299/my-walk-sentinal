@@ -1,0 +1,23 @@
+{
+  "walk": {
+    "duration_min_s": 5.0,
+    "duration_max_s": 60.0,
+    "step_count_min": 4.0,
+    "cadence_min": 40.0,
+    "cadence_max": 160.0,
+    "cadence_consistency_error_max": 0.20,
+    "mean_step_time_consistency_error_max": 0.25
+  },
+  "turn": {
+    "duration_min_s": 2.0,
+    "duration_max_s": 20.0,
+    "step_count_min": 2.0,
+    "step_count_max": 30.0,
+    "peak_angular_velocity_min": 0.0
+  },
+  "transition": {
+    "duration_min_s": 0.8,
+    "duration_max_s": 6.0,
+    "peak_gyro_min": 0.0
+  }
+}
