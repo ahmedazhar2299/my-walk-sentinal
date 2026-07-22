@@ -62,6 +62,8 @@ def metrics(xsens, vicon):
     return {
         "n": int(mask.sum()),
         "mae": float(err.abs().mean()),
+        "rmse": float(np.sqrt(np.nanmean(err.to_numpy(dtype=float) ** 2))),
+        "bias": float(err.mean()),
         "median_error": float(err.median()),
         "median_pct_error": float(pct.median()),
         "r": r,
@@ -80,6 +82,17 @@ def load_merged(name, vicon):
     return vicon.merge(result, on=["subject_id", "visit"], how="inner", suffixes=("_vicon", "_xsens"))
 
 
+def keep_srs_participant(subject_id):
+    subject = str(subject_id)
+    excluded = ("NonStroke", "Old", "Version 1", "Original")
+    return subject.startswith("SRS") and not any(label in subject for label in excluded)
+
+
+def average_by_participant(df):
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    return df.groupby("subject_id", as_index=False)[numeric_cols].mean()
+
+
 def first_available(row, names):
     for name in names:
         if name in row.index:
@@ -93,12 +106,16 @@ def build_alignment_table():
     rows = []
 
     walk = load_merged("treadmill", vicon)
+    walk = walk[walk["subject_id"].map(keep_srs_participant)].copy()
+    walk = average_by_participant(walk)
     duration_candidates = {
         "right": walk["right_duration"],
         "left": walk["left_duration"],
         "trunk": walk["trunk_duration"],
         "sacrum": walk["sacrum_duration"],
+        "sacrum_qc": walk["sacrum_duration"],
         "mean_feet": (walk["right_duration"] + walk["left_duration"]) / 2.0,
+        "mean_right_sacrum": (walk["right_duration"] + walk["sacrum_duration"]) / 2.0,
         "mean_all": (walk["right_duration"] + walk["left_duration"] + walk["trunk_duration"] + walk["sacrum_duration"]) / 4.0,
     }
     start_candidates = {
@@ -106,7 +123,9 @@ def build_alignment_table():
         "left": walk["left_start"],
         "trunk": walk["trunk_start"],
         "sacrum": walk["sacrum_start"],
+        "sacrum_qc": walk["sacrum_start"],
         "mean_feet": (walk["right_start"] + walk["left_start"]) / 2.0,
+        "mean_right_sacrum": (walk["right_start"] + walk["sacrum_start"]) / 2.0,
         "mean_all": (walk["right_start"] + walk["left_start"] + walk["trunk_start"] + walk["sacrum_start"]) / 4.0,
     }
     end_candidates = {
@@ -114,7 +133,9 @@ def build_alignment_table():
         "left": walk["left_end"],
         "trunk": walk["trunk_end"],
         "sacrum": walk["sacrum_end"],
+        "sacrum_qc": walk["sacrum_end"],
         "mean_feet": (walk["right_end"] + walk["left_end"]) / 2.0,
+        "mean_right_sacrum": (walk["right_end"] + walk["sacrum_end"]) / 2.0,
         "mean_all": (walk["right_end"] + walk["left_end"] + walk["trunk_end"] + walk["sacrum_end"]) / 4.0,
     }
     step_candidates = {
@@ -122,7 +143,9 @@ def build_alignment_table():
         "left": walk["left_step_count"],
         "trunk": walk["trunk_step_count"],
         "sacrum": walk["sacrum_step_count"],
+        "sacrum_qc": walk["sacrum_qc_step_count"],
         "mean_feet": (walk["right_step_count"] + walk["left_step_count"]) / 2.0,
+        "mean_right_sacrum": (walk["right_step_count"] + walk["sacrum_step_count"]) / 2.0,
         "mean_feet_calibrated_linear": 1.32156863
         * ((walk["right_step_count"] + walk["left_step_count"]) / 2.0)
         - 13.5400641,

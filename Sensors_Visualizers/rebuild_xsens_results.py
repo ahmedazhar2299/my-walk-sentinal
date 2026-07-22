@@ -18,10 +18,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from imu_features.config import load_config
 from imu_features.transition_features import transition_flexion_extension_peaks
-from imu_features.turn_features import extract_turn_features
 from imu_features.utils import (
+    apply_lowpass_filter,
+    estimate_sampling_interval_s,
+    mask_close_gaps,
     read_and_preprocess_csv,
-    robust_p2p_threshold,
+    select_motion_acc_signal,
     select_turn_angular_signal,
 )
 
@@ -86,21 +88,55 @@ def finite_user_or_acc(df):
 
 
 def walking_signal(df, sensor: str):
-    if sensor == "sacrum" and "gyro_z" in df:
-        return np.abs(df["gyro_z"].to_numpy(dtype=float))
+    if sensor == "right" and "gyro_x" in df:
+        return df["gyro_x"].to_numpy(dtype=float)
     if sensor == "left" and "gyro_x" in df:
         return np.abs(df["gyro_x"].to_numpy(dtype=float))
+    if sensor == "trunk" and "gyro_mag" in df:
+        return df["gyro_mag"].to_numpy(dtype=float)
+    if sensor == "sacrum" and "gyro_z" in df:
+        return df["gyro_z"].to_numpy(dtype=float)
     return df["acc_mag_gravity_removed"].to_numpy(dtype=float)
 
 
 def walking_params(sensor: str):
     if sensor == "right":
-        return {"sigma": 10.0, "mode": "percentile", "value": 70.0, "distance_s": 0.45}
+        return {"sigma": 12.0, "mode": "percentile", "value": 55.0, "distance_s": 0.35}
     if sensor == "left":
         return {"sigma": 8.0, "mode": "percentile", "value": 75.0, "distance_s": 0.30}
     if sensor == "sacrum":
-        return {"sigma": 4.0, "mode": "mad", "value": 2.0, "distance_s": 0.50}
+        return {"sigma": 4.0, "mode": "mad", "value": 1.25, "distance_s": 0.35}
+    if sensor == "trunk":
+        return {"sigma": 12.0, "mode": "percentile", "value": 65.0, "distance_s": 0.45}
     return {"sigma": 8.0, "mode": "percentile", "value": 75.0, "distance_s": 0.40}
+
+
+def add_walking_sacrum_qc(row: dict, disagreement_steps: float = 22.0, bias_correction_steps: float = 3.5):
+    sacrum_steps = row.get("sacrum_step_count", np.nan)
+    trunk_steps = row.get("trunk_step_count", np.nan)
+    if np.isfinite(sacrum_steps) and np.isfinite(trunk_steps):
+        use_trunk = abs(float(sacrum_steps) - float(trunk_steps)) > disagreement_steps
+        steps = float(trunk_steps if use_trunk else sacrum_steps)
+        source = "trunk" if use_trunk else "sacrum"
+    elif np.isfinite(sacrum_steps):
+        steps = float(sacrum_steps)
+        source = "sacrum"
+    elif np.isfinite(trunk_steps):
+        steps = float(trunk_steps)
+        source = "trunk"
+    else:
+        steps = np.nan
+        source = ""
+    if np.isfinite(steps):
+        steps = float(steps + bias_correction_steps)
+
+    duration = row.get("sacrum_duration", np.nan)
+    if not np.isfinite(duration):
+        duration = row.get("trunk_duration", np.nan)
+    row["sacrum_qc_step_count"] = steps
+    row["sacrum_qc_cadence"] = float(steps / duration * 60.0) if np.isfinite(steps) and np.isfinite(duration) and duration > 0 else np.nan
+    row["sacrum_qc_mean_step_time"] = float(duration / steps) if np.isfinite(steps) and steps > 0 and np.isfinite(duration) else np.nan
+    row["sacrum_qc_source"] = source
 
 
 def walking_summary(df, meta, sensor: str, fixed_duration_s: float = 60.0):
@@ -143,37 +179,66 @@ def walking_summary(df, meta, sensor: str, fixed_duration_s: float = 60.0):
 
 
 def turn_summary(df, meta, config, prefix: str):
-    features = extract_turn_features(df, meta, config, prefix=prefix)
-    angular, _ = select_turn_angular_signal(df, config, meta.fs_hz)
     time_s = df["time_s"].to_numpy(dtype=float)
-    angular_abs = np.abs(angular)
-    window_sec = getattr(config.window_gate, "turn_window_sec", config.window_gate.window_sec)
-    threshold, _ = robust_p2p_threshold(
-        time_s=time_s,
-        signal=angular_abs,
-        window_sec=window_sec,
-        k=config.window_gate.turn_threshold_k,
-        fallback=config.window_gate.turn_min_amp_threshold,
-        cap_scale=config.window_gate.p2p_cap_scale,
-    )
+    if "gyro_y" in df.columns:
+        angular = np.abs(df["gyro_y"].to_numpy(dtype=float))
+        gyro_source = "gyro_y"
+        if config.filtering.enabled and np.isfinite(meta.fs_hz):
+            angular = apply_lowpass_filter(
+                angular,
+                fs_hz=meta.fs_hz,
+                cutoff_hz=config.filtering.cutoff_hz,
+                order=config.filtering.order,
+            )
+    else:
+        angular, gyro_source = select_turn_angular_signal(df, config, meta.fs_hz)
+        angular = np.abs(angular)
+
+    threshold = 0.25 * float(np.nanmax(angular)) if np.isfinite(angular).any() else np.nan
     start = np.nan
     end = np.nan
-    active = np.isfinite(angular_abs) & np.isfinite(threshold) & (angular_abs >= threshold)
+    duration = np.nan
+    turn_mask = np.zeros(len(time_s), dtype=bool)
+    active = np.isfinite(angular) & np.isfinite(threshold) & (angular >= threshold)
+    if np.isfinite(meta.fs_hz) and meta.fs_hz > 0:
+        active = mask_close_gaps(active, max_gap_samples=max(1, int(round(0.20 * meta.fs_hz))))
     if np.any(active):
         idx = np.where(active)[0]
-        start = float(time_s[int(idx[0])])
-        end = float(time_s[int(idx[-1])])
-    duration = features.get(f"{prefix}_duration", np.nan)
-    if np.isfinite(start) and np.isfinite(end):
+        pad = max(1, int(round(0.10 * meta.fs_hz))) if np.isfinite(meta.fs_hz) and meta.fs_hz > 0 else 1
+        i0 = max(0, int(idx[0]) - pad)
+        i1 = min(len(time_s) - 1, int(idx[-1]) + pad)
+        start = float(time_s[i0])
+        end = float(time_s[i1])
         duration = float(end - start)
-    steps = features.get(f"{prefix}_step_count", np.nan)
+        turn_mask[i0 : i1 + 1] = True
+
+    acc_signal = np.abs(df["acc_mag_gravity_removed"].to_numpy(dtype=float))
+    if not np.isfinite(acc_signal).any() or np.nanstd(acc_signal) <= 1e-8:
+        acc_signal, _ = select_motion_acc_signal(df, config.prefer_useracc_for_motion)
+        acc_signal = np.abs(acc_signal)
+
+    steps = np.nan
+    if np.any(turn_mask):
+        t_turn = time_s[turn_mask]
+        acc_turn = acc_signal[turn_mask]
+        fs_turn = 1.0 / estimate_sampling_interval_s(t_turn) if len(t_turn) > 2 else meta.fs_hz
+        if len(acc_turn) >= 3 and np.isfinite(fs_turn) and fs_turn > 0:
+            acc_turn_smooth = gaussian_filter1d(acc_turn, sigma=2)
+            step_threshold = float(np.nanpercentile(acc_turn_smooth, 60))
+            peaks, _ = find_peaks(
+                acc_turn_smooth,
+                height=step_threshold,
+                distance=max(1, int(round(0.45 * fs_turn))),
+            )
+            steps = float(len(peaks))
+    angular_stats = angular[turn_mask] if np.any(turn_mask) else angular
     return {
         "start": start,
         "end": end,
         "turn_duration": duration,
         "turn_step_count": steps,
-        "peak_angular_velocity": features.get(f"{prefix}_peak_angular_velocity", np.nan),
-        "mean_angular_velocity": features.get(f"{prefix}_mean_angular_velocity", np.nan),
+        "peak_angular_velocity": float(np.nanmax(angular_stats)) if np.isfinite(angular_stats).any() else np.nan,
+        "mean_angular_velocity": float(np.nanmean(angular_stats)) if np.isfinite(angular_stats).any() else np.nan,
     }
 
 
@@ -306,6 +371,8 @@ def build_rows(prefixes: tuple[str, ...], kind: str, config, turn_prefix: str | 
                     if key == "time_to_first_gyro_extreme":
                         continue
                     row[f"{sensor}_{key}"] = value
+            if kind == "walk":
+                add_walking_sacrum_qc(row)
             if any_sensor:
                 rows.append(row)
     return pd.DataFrame(rows)
