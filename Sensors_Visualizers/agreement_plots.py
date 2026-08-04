@@ -9,12 +9,9 @@ import pandas as pd
 
 
 HERE = Path(__file__).resolve().parent
-VICON_PATH = HERE / "Vicon - Annotations.csv"
-
-
-def visit_label(visit_id):
-    digits = "".join(ch for ch in str(visit_id) if ch.isdigit())
-    return f"Visit{int(digits)}" if digits else str(visit_id)
+VICON_PATH = HERE / "Vicon - Annotations_long_calibrated.csv"
+XSENS_RESULT_DIR = HERE / "XSENS_results"
+VISIT_FILTER = {"V01"}
 
 
 def keep_srs_participant(subject_id):
@@ -23,7 +20,8 @@ def keep_srs_participant(subject_id):
     return subject.startswith("SRS") and not any(label in subject for label in excluded)
 
 
-def icc_a1(xsens, vicon):
+def icc_2_1(xsens, vicon):
+    """Two-way random-effects, single-measure, absolute-agreement ICC."""
     x = pd.to_numeric(xsens, errors="coerce")
     y = pd.to_numeric(vicon, errors="coerce")
     mask = x.notna() & y.notna()
@@ -58,14 +56,26 @@ def agreement_metrics(df, xsens_col="xsens", vicon_col="vicon"):
         "pearson_r": float(np.corrcoef(x[mask], y[mask])[0, 1])
         if mask.sum() > 1 and x[mask].std() > 0 and y[mask].std() > 0
         else np.nan,
-        "icc_a1": icc_a1(x, y),
+        "icc_2_1": icc_2_1(x, y),
     }
 
 
 def load_vicon():
     vicon = pd.read_csv(VICON_PATH)
-    vicon["visit"] = vicon["visit_id"].map(visit_label)
-    return vicon[vicon["subject_id"].map(keep_srs_participant)].copy()
+    vicon = vicon[vicon["subject_id"].map(keep_srs_participant)].copy()
+    numeric_cols = [
+        "start_time_s",
+        "end_time_s",
+        "duration_s",
+        "step_count",
+        "cadence_steps_min",
+        "mean_step_time_s",
+        "time_to_peak_s",
+    ]
+    for col in numeric_cols:
+        if col in vicon:
+            vicon[col] = pd.to_numeric(vicon[col], errors="coerce")
+    return vicon
 
 
 @dataclass(frozen=True)
@@ -77,62 +87,65 @@ class AgreementSpec:
     unit: str
     activity: str
     transform: str | None = None
+    xsens_slope: float = 1.0
+    xsens_intercept: float = 0.0
+    round_xsens: bool = False
 
 
 SPECS = [
     AgreementSpec(
         "Walking Step Count",
-        "treadmill_results.csv",
+        "walking_results.csv",
         "sacrum_qc_step_count",
-        "walk_step_count",
+        "step_count",
         "steps",
-        "walking",
+        "walk",
     ),
     AgreementSpec(
         "Walking Cadence",
-        "treadmill_results.csv",
+        "walking_results.csv",
         "sacrum_qc_cadence",
-        "walk_cadence_steps_min",
+        "cadence_steps_min",
         "steps/min",
-        "walking",
+        "walk",
     ),
     AgreementSpec(
         "Left Turn Duration",
-        "turn_left_results.csv",
-        "sacrum_turn_duration",
-        "left_turn_duration_s",
+        "left_turn_results.csv",
+        "sacrum_duration_s",
+        "duration_s",
         "s",
         "left_turn",
     ),
     AgreementSpec(
         "Left Turn Step Count",
-        "turn_left_results.csv",
-        "sacrum_turn_step_count",
-        "left_turn_step_count",
+        "left_turn_results.csv",
+        "sacrum_step_count",
+        "step_count",
         "steps",
         "left_turn",
     ),
     AgreementSpec(
         "Right Turn Duration",
-        "turn_right_results.csv",
-        "sacrum_turn_duration",
-        "right_turn_duration_s",
+        "right_turn_results.csv",
+        "sacrum_duration_s",
+        "duration_s",
         "s",
         "right_turn",
     ),
     AgreementSpec(
         "Right Turn Step Count",
-        "turn_right_results.csv",
-        "sacrum_turn_step_count",
-        "right_turn_step_count",
+        "right_turn_results.csv",
+        "sacrum_step_count",
+        "step_count",
         "steps",
         "right_turn",
     ),
     AgreementSpec(
         "Sit-to-Stand Duration",
         "sit_to_stand_results.csv",
-        "sacrum_duration",
-        "sts_duration_s",
+        "sacrum_duration_s",
+        "duration_s",
         "s",
         "sit_to_stand",
     ),
@@ -141,22 +154,40 @@ SPECS = [
 
 def participant_agreement_table(spec: AgreementSpec):
     vicon = load_vicon()
-    xsens = pd.read_csv(HERE / spec.result_file)
+    vicon = vicon[vicon["activity"].eq(spec.activity)].copy()
+    xsens = pd.read_csv(XSENS_RESULT_DIR / spec.result_file)
     xsens = xsens[xsens["subject_id"].map(keep_srs_participant)].copy()
-    merged = vicon.merge(xsens, on=["subject_id", "visit"], how="inner", suffixes=("_vicon", "_xsens"))
+    if VISIT_FILTER:
+        vicon = vicon[vicon["visit_id"].isin(VISIT_FILTER)].copy()
+        xsens = xsens[xsens["visit_id"].isin(VISIT_FILTER)].copy()
+    vicon_col = spec.vicon_col
+    xsens_col = spec.xsens_col
+    vicon[vicon_col] = pd.to_numeric(vicon[vicon_col], errors="coerce")
+    xsens[xsens_col] = pd.to_numeric(xsens[xsens_col], errors="coerce")
+    vicon = vicon.groupby(["subject_id", "visit_id", "activity"], as_index=False)[vicon_col].mean()
+    xsens = xsens.groupby(["subject_id", "visit_id", "activity"], as_index=False)[xsens_col].mean()
+    merged = vicon.merge(
+        xsens,
+        on=["subject_id", "visit_id", "activity"],
+        how="inner",
+        suffixes=("_vicon", "_xsens"),
+    )
     vicon_col = spec.vicon_col if spec.vicon_col in merged else f"{spec.vicon_col}_vicon"
     xsens_col = spec.xsens_col if spec.xsens_col in merged else f"{spec.xsens_col}_xsens"
-    table = merged[["subject_id", "visit", vicon_col, xsens_col]].rename(
+    table = merged[["subject_id", "visit_id", "activity", vicon_col, xsens_col]].rename(
         columns={vicon_col: "vicon", xsens_col: "xsens"}
     )
-    table["visit_order"] = table["visit"].astype(str).str.extract(r"(\d+)").astype(float)
-    table = table.sort_values(["subject_id", "visit_order"]).groupby("subject_id", as_index=False).first()
-    table = table.drop(columns=["visit_order"])
     table = table.dropna(subset=["vicon", "xsens"])
+    table["xsens_raw"] = table["xsens"]
+    table["xsens"] = table["xsens"] * spec.xsens_slope + spec.xsens_intercept
+    if spec.round_xsens:
+        table["xsens"] = table["xsens"].round().clip(lower=0)
+    else:
+        table["xsens"] = table["xsens"].clip(lower=0)
     table["error"] = table["xsens"] - table["vicon"]
     table["abs_error"] = table["error"].abs()
     table["percent_error"] = table["abs_error"] / table["vicon"].abs().replace(0, np.nan) * 100.0
-    return table.sort_values("abs_error").reset_index(drop=True)
+    return table.sort_values(["subject_id", "visit_id"]).reset_index(drop=True)
 
 
 def all_metric_summary(specs=SPECS):
@@ -202,7 +233,7 @@ def plot_scatter_and_bland_altman(table, title, unit):
     ax.text(
         0.02,
         0.98,
-        f"ICC(A,1)={metrics['icc_a1']:.3f}\nMAE={metrics['mae']:.3f}\nr={metrics['pearson_r']:.3f}",
+        f"ICC(2,1)={metrics['icc_2_1']:.3f}\nMAE={metrics['mae']:.3f}\nr={metrics['pearson_r']:.3f}",
         transform=ax.transAxes,
         va="top",
         bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
@@ -219,7 +250,12 @@ def plot_scatter_and_bland_altman(table, title, unit):
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best")
     for _, row in table.iterrows():
-        ax.annotate(row["subject_id"], ((row["xsens"] + row["vicon"]) / 2.0, row["error"]), fontsize=8, alpha=0.75)
+        ax.annotate(
+            row["subject_id"],
+            ((row["xsens"] + row["vicon"]) / 2.0, row["error"]),
+            fontsize=8,
+            alpha=0.75,
+        )
     plt.tight_layout()
     return fig
 
