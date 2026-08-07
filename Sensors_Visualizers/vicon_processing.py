@@ -186,23 +186,53 @@ def count_foot_steps(df, fs_hz, start_idx=0, end_idx=None, min_interval_s=0.30):
     return count, sorted(float(t) for t in peak_times)
 
 
+def _merge_event_times(times, merge_gap_s=0.18):
+    times = sorted(float(t) for t in times if np.isfinite(t))
+    if not times:
+        return []
+    clusters = [[times[0]]]
+    for value in times[1:]:
+        if value - clusters[-1][-1] <= merge_gap_s:
+            clusters[-1].append(value)
+        else:
+            clusters.append([value])
+    return [float(np.mean(cluster)) for cluster in clusters]
+
+
+def ten_step_window_from_foot_markers(df, fs_hz, target_steps=10):
+    _, peak_times = count_foot_steps(df, fs_hz, 0, len(df) - 1, min_interval_s=0.35)
+    step_times = _merge_event_times(peak_times, merge_gap_s=0.18)
+    if len(step_times) < target_steps:
+        return np.nan, np.nan, np.nan, np.nan, np.nan
+    selected = step_times[:target_steps]
+    start = float(selected[0])
+    end = float(selected[-1])
+    duration = float(end - start)
+    cadence = float(target_steps / duration * 60.0) if duration > 0 else np.nan
+    mean_step = float(duration / target_steps) if duration > 0 else np.nan
+    return start, end, duration, cadence, mean_step
+
+
 def summarize_nw(csv_path):
     df, meta = load_vicon_marker_trajectories(csv_path)
     fs = meta["fs_hz"]
     time_s = df["time_s"].to_numpy(dtype=float)
-    start_idx, end_idx = 0, len(df) - 1
-    duration = float(time_s[end_idx] - time_s[start_idx])
-    step_count, _ = count_foot_steps(df, fs, start_idx, end_idx, min_interval_s=0.35)
-    cadence = step_count / duration * 60.0 if duration > 0 else np.nan
-    mean_step = duration / step_count if step_count > 0 else np.nan
+    ten_start, ten_end, ten_duration, ten_cadence, ten_mean_step = ten_step_window_from_foot_markers(df, fs)
+    ten_count = 10.0 if np.isfinite(ten_duration) else np.nan
     return {
         "activity": "walk",
-        "start_time_s": round(float(time_s[start_idx]), 3),
-        "end_time_s": round(float(time_s[end_idx]), 3),
-        "duration_s": round(duration, 3),
-        "step_count": float(step_count),
-        "cadence_steps_min": round(cadence, 3) if np.isfinite(cadence) else np.nan,
-        "mean_step_time_s": round(mean_step, 3) if np.isfinite(mean_step) else np.nan,
+        "start_time_s": round(ten_start, 3) if np.isfinite(ten_start) else np.nan,
+        "end_time_s": round(ten_end, 3) if np.isfinite(ten_end) else np.nan,
+        "duration_s": round(ten_duration, 3) if np.isfinite(ten_duration) else np.nan,
+        "step_count": ten_count,
+        "cadence_steps_min": round(ten_cadence, 3) if np.isfinite(ten_cadence) else np.nan,
+        "mean_step_time_s": round(ten_mean_step, 3) if np.isfinite(ten_mean_step) else np.nan,
+        "ten_step_start_time_s": round(ten_start, 3) if np.isfinite(ten_start) else np.nan,
+        "ten_step_end_time_s": round(ten_end, 3) if np.isfinite(ten_end) else np.nan,
+        "ten_step_duration_s": round(ten_duration, 3) if np.isfinite(ten_duration) else np.nan,
+        "ten_step_count": ten_count,
+        "ten_step_cadence_steps_min": round(ten_cadence, 3) if np.isfinite(ten_cadence) else np.nan,
+        "ten_step_mean_step_time_s": round(ten_mean_step, 3) if np.isfinite(ten_mean_step) else np.nan,
         "time_to_peak_s": np.nan,
     }
 

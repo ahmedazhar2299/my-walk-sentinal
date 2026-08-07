@@ -54,6 +54,12 @@ GENERIC_FEATURES = (
     "step_count",
     "cadence_steps_min",
     "mean_step_time_s",
+    "ten_step_start_time_s",
+    "ten_step_end_time_s",
+    "ten_step_duration_s",
+    "ten_step_count",
+    "ten_step_cadence_steps_min",
+    "ten_step_mean_step_time_s",
     "peak_angular_velocity",
     "mean_angular_velocity",
     "flexion_peak",
@@ -94,12 +100,18 @@ def normalize_summary(summary: dict | None, activity: str) -> dict:
     if activity == "walk":
         out.update(
             {
-                "start_time_s": summary.get("start", np.nan),
-                "end_time_s": summary.get("end", np.nan),
-                "duration_s": summary.get("duration", np.nan),
-                "step_count": summary.get("step_count", np.nan),
-                "cadence_steps_min": summary.get("cadence", np.nan),
-                "mean_step_time_s": summary.get("mean_step_time", np.nan),
+                "start_time_s": summary.get("ten_step_start", np.nan),
+                "end_time_s": summary.get("ten_step_end", np.nan),
+                "duration_s": summary.get("ten_step_duration", np.nan),
+                "step_count": summary.get("ten_step_count", np.nan),
+                "cadence_steps_min": summary.get("ten_step_cadence", np.nan),
+                "mean_step_time_s": summary.get("ten_step_mean_step_time", np.nan),
+                "ten_step_start_time_s": summary.get("ten_step_start", np.nan),
+                "ten_step_end_time_s": summary.get("ten_step_end", np.nan),
+                "ten_step_duration_s": summary.get("ten_step_duration", np.nan),
+                "ten_step_count": summary.get("ten_step_count", np.nan),
+                "ten_step_cadence_steps_min": summary.get("ten_step_cadence", np.nan),
+                "ten_step_mean_step_time_s": summary.get("ten_step_mean_step_time", np.nan),
             }
         )
     elif activity in {"left_turn", "right_turn"}:

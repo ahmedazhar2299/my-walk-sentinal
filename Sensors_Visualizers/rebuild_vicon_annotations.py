@@ -91,6 +91,12 @@ def build_annotations(vicon_root=DEFAULT_VICON_ROOT):
                     "step_count": np.nan,
                     "cadence_steps_min": np.nan,
                     "mean_step_time_s": np.nan,
+                    "ten_step_start_time_s": np.nan,
+                    "ten_step_end_time_s": np.nan,
+                    "ten_step_duration_s": np.nan,
+                    "ten_step_count": np.nan,
+                    "ten_step_cadence_steps_min": np.nan,
+                    "ten_step_mean_step_time_s": np.nan,
                     "time_to_peak_s": np.nan,
                 }
             )
@@ -108,6 +114,12 @@ def build_annotations(vicon_root=DEFAULT_VICON_ROOT):
         "step_count",
         "cadence_steps_min",
         "mean_step_time_s",
+        "ten_step_start_time_s",
+        "ten_step_end_time_s",
+        "ten_step_duration_s",
+        "ten_step_count",
+        "ten_step_cadence_steps_min",
+        "ten_step_mean_step_time_s",
         "time_to_peak_s",
     ]
     return pd.DataFrame(rows)[columns]

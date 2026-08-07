@@ -9,7 +9,9 @@ import pandas as pd
 
 
 HERE = Path(__file__).resolve().parent
-VICON_PATH = HERE / "Vicon - Annotations_long_calibrated.csv"
+VICON_PATH = HERE / "Vicon - Annotations_long.csv"
+VICON_RAW_PATH = HERE / "Vicon - Annotations_long.csv"
+VICON_REVIEWED_PATH = HERE / "Vicon - Annotations.csv"
 XSENS_RESULT_DIR = HERE / "XSENS_results"
 VISIT_FILTER = {"V01"}
 
@@ -60,8 +62,76 @@ def agreement_metrics(df, xsens_col="xsens", vicon_col="vicon"):
     }
 
 
-def load_vicon():
-    vicon = pd.read_csv(VICON_PATH)
+def _reviewed_vicon_to_long(vicon: pd.DataFrame) -> pd.DataFrame:
+    mappings = [
+        (
+            "walk",
+            {
+                "start_time_s": "walk_10_step_start_s",
+                "end_time_s": "walk_10_step_end_s",
+                "duration_s": "walk_10_step_duration_s",
+                "step_count": "walk_10_step_count",
+                "cadence_steps_min": "walk_10_step_cadence_steps_min",
+                "mean_step_time_s": "walk_10_step_mean_step_time_s",
+            },
+        ),
+        (
+            "left_turn",
+            {
+                "start_time_s": "left_turn_start_s",
+                "end_time_s": "left_turn_end_s",
+                "duration_s": "left_turn_duration_s",
+                "step_count": "left_turn_step_count",
+                "time_to_peak_s": "left_turn_time_to_peak_s",
+            },
+        ),
+        (
+            "right_turn",
+            {
+                "start_time_s": "right_turn_start_s",
+                "end_time_s": "right_turn_end_s",
+                "duration_s": "right_turn_duration_s",
+                "step_count": "right_turn_step_count",
+                "time_to_peak_s": "right_turn_time_to_peak_s",
+            },
+        ),
+        (
+            "sit_to_stand",
+            {
+                "start_time_s": "sts_start_s",
+                "end_time_s": "sts_end_s",
+                "duration_s": "sts_duration_s",
+                "time_to_peak_s": "sts_time_to_peak_s",
+            },
+        ),
+    ]
+    rows = []
+    for _, source in vicon.iterrows():
+        for activity, columns in mappings:
+            row = {
+                "subject_id": source["subject_id"],
+                "visit_id": source["visit_id"],
+                "activity": activity,
+                "trial_id": 1,
+            }
+            for out_col in [
+                "start_time_s",
+                "end_time_s",
+                "duration_s",
+                "step_count",
+                "cadence_steps_min",
+                "mean_step_time_s",
+                "time_to_peak_s",
+            ]:
+                row[out_col] = source.get(columns.get(out_col, ""), np.nan)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def load_vicon(path: Path | None = None):
+    vicon = pd.read_csv(path or VICON_PATH)
+    if "walk_start_s" in vicon.columns:
+        vicon = _reviewed_vicon_to_long(vicon)
     vicon = vicon[vicon["subject_id"].map(keep_srs_participant)].copy()
     numeric_cols = [
         "start_time_s",
@@ -70,6 +140,12 @@ def load_vicon():
         "step_count",
         "cadence_steps_min",
         "mean_step_time_s",
+        "ten_step_start_time_s",
+        "ten_step_end_time_s",
+        "ten_step_duration_s",
+        "ten_step_count",
+        "ten_step_cadence_steps_min",
+        "ten_step_mean_step_time_s",
         "time_to_peak_s",
     ]
     for col in numeric_cols:
@@ -90,24 +166,40 @@ class AgreementSpec:
     xsens_slope: float = 1.0
     xsens_intercept: float = 0.0
     round_xsens: bool = False
+    vicon_path: Path | None = None
+    aggregation: str = "mean"
 
 
 SPECS = [
     AgreementSpec(
-        "Walking Step Count",
+        "Walking 10-Step Duration",
         "walking_results.csv",
-        "sacrum_qc_step_count",
-        "step_count",
-        "steps",
+        "sacrum_duration_s",
+        "duration_s",
+        "s",
         "walk",
+        vicon_path=VICON_RAW_PATH,
+        aggregation="first",
     ),
     AgreementSpec(
-        "Walking Cadence",
+        "Walking 10-Step Cadence",
         "walking_results.csv",
-        "sacrum_qc_cadence",
+        "sacrum_cadence_steps_min",
         "cadence_steps_min",
         "steps/min",
         "walk",
+        vicon_path=VICON_RAW_PATH,
+        aggregation="first",
+    ),
+    AgreementSpec(
+        "Walking 10-Step Mean Step Time",
+        "walking_results.csv",
+        "sacrum_mean_step_time_s",
+        "mean_step_time_s",
+        "s",
+        "walk",
+        vicon_path=VICON_RAW_PATH,
+        aggregation="first",
     ),
     AgreementSpec(
         "Left Turn Duration",
@@ -116,6 +208,8 @@ SPECS = [
         "duration_s",
         "s",
         "left_turn",
+        vicon_path=VICON_REVIEWED_PATH,
+        aggregation="first",
     ),
     AgreementSpec(
         "Left Turn Step Count",
@@ -124,6 +218,8 @@ SPECS = [
         "step_count",
         "steps",
         "left_turn",
+        vicon_path=VICON_REVIEWED_PATH,
+        aggregation="first",
     ),
     AgreementSpec(
         "Right Turn Duration",
@@ -132,6 +228,8 @@ SPECS = [
         "duration_s",
         "s",
         "right_turn",
+        vicon_path=VICON_REVIEWED_PATH,
+        aggregation="first",
     ),
     AgreementSpec(
         "Right Turn Step Count",
@@ -140,6 +238,8 @@ SPECS = [
         "step_count",
         "steps",
         "right_turn",
+        vicon_path=VICON_REVIEWED_PATH,
+        aggregation="first",
     ),
     AgreementSpec(
         "Sit-to-Stand Duration",
@@ -148,12 +248,14 @@ SPECS = [
         "duration_s",
         "s",
         "sit_to_stand",
+        vicon_path=VICON_REVIEWED_PATH,
+        aggregation="first",
     ),
 ]
 
 
 def participant_agreement_table(spec: AgreementSpec):
-    vicon = load_vicon()
+    vicon = load_vicon(spec.vicon_path)
     vicon = vicon[vicon["activity"].eq(spec.activity)].copy()
     xsens = pd.read_csv(XSENS_RESULT_DIR / spec.result_file)
     xsens = xsens[xsens["subject_id"].map(keep_srs_participant)].copy()
@@ -164,14 +266,27 @@ def participant_agreement_table(spec: AgreementSpec):
     xsens_col = spec.xsens_col
     vicon[vicon_col] = pd.to_numeric(vicon[vicon_col], errors="coerce")
     xsens[xsens_col] = pd.to_numeric(xsens[xsens_col], errors="coerce")
-    vicon = vicon.groupby(["subject_id", "visit_id", "activity"], as_index=False)[vicon_col].mean()
-    xsens = xsens.groupby(["subject_id", "visit_id", "activity"], as_index=False)[xsens_col].mean()
-    merged = vicon.merge(
-        xsens,
-        on=["subject_id", "visit_id", "activity"],
+    keys = ["subject_id", "visit_id", "activity"]
+    if "trial_id" in vicon and "trial_id" in xsens:
+        keys.append("trial_id")
+    if spec.aggregation == "first":
+        vicon = vicon.sort_values("trial_id").groupby(["subject_id", "visit_id", "activity"], as_index=False).first()
+        xsens = xsens.sort_values("trial_id").groupby(["subject_id", "visit_id", "activity"], as_index=False).first()
+        keys = ["subject_id", "visit_id", "activity"]
+
+    merged = vicon[keys + [vicon_col]].merge(
+        xsens[keys + [xsens_col]],
+        on=keys,
         how="inner",
         suffixes=("_vicon", "_xsens"),
     )
+    if spec.aggregation != "first":
+        vicon_named = vicon_col if vicon_col in merged else f"{vicon_col}_vicon"
+        xsens_named = xsens_col if xsens_col in merged else f"{xsens_col}_xsens"
+        merged = (
+            merged.groupby(["subject_id", "visit_id", "activity"], as_index=False)[[vicon_named, xsens_named]]
+            .mean()
+        )
     vicon_col = spec.vicon_col if spec.vicon_col in merged else f"{spec.vicon_col}_vicon"
     xsens_col = spec.xsens_col if spec.xsens_col in merged else f"{spec.xsens_col}_xsens"
     table = merged[["subject_id", "visit_id", "activity", vicon_col, xsens_col]].rename(
@@ -203,7 +318,11 @@ def all_metric_summary(specs=SPECS):
         }
         row.update(agreement_metrics(table))
         rows.append(row)
-    return pd.DataFrame(rows)
+    summary = pd.DataFrame(rows)
+    for col in ["mae", "rmse", "bias", "pearson_r", "icc_2_1"]:
+        if col in summary:
+            summary[col] = summary[col].round(3)
+    return summary
 
 
 def plot_scatter_and_bland_altman(table, title, unit):

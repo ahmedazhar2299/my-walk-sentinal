@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter1d
-from scipy.signal import find_peaks
+from scipy.signal import butter, filtfilt, find_peaks
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -99,6 +99,43 @@ def walking_signal(df, sensor: str):
     return df["acc_mag_gravity_removed"].to_numpy(dtype=float)
 
 
+def bandpass_signal(signal: np.ndarray, fs_hz: float, low_hz: float, high_hz: float) -> np.ndarray:
+    signal = np.asarray(signal, dtype=float)
+    if not np.isfinite(fs_hz) or fs_hz <= 0 or len(signal) < 8:
+        return signal - np.nanmedian(signal)
+    nyquist = fs_hz / 2.0
+    high_hz = min(high_hz, nyquist * 0.90)
+    if low_hz <= 0 or high_hz <= low_hz:
+        return signal - np.nanmedian(signal)
+    b, a = butter(2, [low_hz / nyquist, high_hz / nyquist], btype="band")
+    return filtfilt(b, a, signal - np.nanmedian(signal))
+
+
+def sacrum_walking_accel_event_summary(df, meta, t):
+    # Lower-trunk gait-event proxy: band-passed dynamic acceleration magnitude.
+    # This avoids gyro-axis dependence and follows the Vicon first-event window convention.
+    fs_hz = float(meta.fs_hz)
+    signal = df["acc_mag_gravity_removed"].to_numpy(dtype=float)
+    time_s = df["time_s"].to_numpy(dtype=float)
+    mask = (time_s >= t[0]) & (time_s <= t[-1])
+    y = bandpass_signal(signal[mask], fs_hz, low_hz=0.5, high_hz=3.0)
+    y = gaussian_filter1d(y, sigma=max(1, int(round(0.15 * fs_hz))))
+    center = float(np.nanmedian(y))
+    mad = float(np.nanmedian(np.abs(y - center)))
+    threshold = center + 0.75 * mad
+    distance = max(1, int(round(0.35 * fs_hz)))
+    peaks, _ = find_peaks(y, height=threshold, distance=distance)
+    if len(peaks) < 9:
+        return np.nan, np.nan, np.nan, np.nan, 0.0
+    event_times = t[peaks[:9]]
+    start = float(event_times[0])
+    end = float(event_times[-1])
+    duration = float(end - start)
+    cadence = float(10.0 / duration * 60.0) if duration > 0 else np.nan
+    mean_step_time = float(duration / 10.0) if duration > 0 else np.nan
+    return start, end, duration, cadence, mean_step_time, float(len(peaks))
+
+
 def walking_params(sensor: str):
     if sensor == "right":
         return {"sigma": 12.0, "mode": "percentile", "value": 55.0, "distance_s": 0.35}
@@ -109,6 +146,58 @@ def walking_params(sensor: str):
     if sensor == "trunk":
         return {"sigma": 12.0, "mode": "percentile", "value": 65.0, "distance_s": 0.45}
     return {"sigma": 8.0, "mode": "percentile", "value": 75.0, "distance_s": 0.40}
+
+
+def walking_10_step_strategy(sensor: str) -> tuple[int, str]:
+    # Treadmill mapping: IMU peaks are not always one-to-one with combined foot-step events.
+    # Use stable windows instead of the first N peaks so early noisy bursts do not shrink duration.
+    if sensor == "right":
+        return 9, "longest"
+    if sensor == "left":
+        return 12, "regular_middle"
+    if sensor == "trunk":
+        return 8, "longest"
+    if sensor == "sacrum":
+        return 8, "longest"
+    return 10, "longest"
+
+
+def select_peak_time_window(peak_times: np.ndarray, peak_count: int, mode: str) -> np.ndarray:
+    peak_times = np.asarray(peak_times, dtype=float)
+    if len(peak_times) < peak_count or peak_count < 2:
+        return np.array([], dtype=float)
+
+    starts = np.arange(0, len(peak_times) - peak_count + 1)
+    windows = np.array([peak_times[i : i + peak_count] for i in starts])
+    durations = windows[:, -1] - windows[:, 0]
+    valid = np.isfinite(durations) & (durations > 0)
+    if not np.any(valid):
+        return np.array([], dtype=float)
+
+    if mode == "longest":
+        idx = int(np.where(valid)[0][np.argmax(durations[valid])])
+        return windows[idx]
+
+    if mode == "regular_middle":
+        interval_cv = np.full(len(windows), np.inf)
+        for i, window in enumerate(windows):
+            intervals = np.diff(window)
+            mean_interval = float(np.nanmean(intervals)) if len(intervals) else np.nan
+            if np.isfinite(mean_interval) and mean_interval > 0:
+                interval_cv[i] = float(np.nanstd(intervals) / mean_interval)
+        cv_valid = np.isfinite(interval_cv) & valid
+        if np.any(cv_valid):
+            cutoff = float(np.nanpercentile(interval_cv[cv_valid], 40))
+            candidates = np.where(cv_valid & (interval_cv <= cutoff))[0]
+        else:
+            candidates = np.where(valid)[0]
+        trial_mid = float((peak_times[0] + peak_times[-1]) / 2.0)
+        window_mid = (windows[candidates, 0] + windows[candidates, -1]) / 2.0
+        idx = int(candidates[np.argmin(np.abs(window_mid - trial_mid))])
+        return windows[idx]
+
+    idx = int(np.where(valid)[0][0])
+    return windows[idx]
 
 
 def add_walking_sacrum_qc(row: dict, disagreement_steps: float = 22.0, bias_correction_steps: float = 3.5):
@@ -168,6 +257,29 @@ def walking_summary(df, meta, sensor: str, fixed_duration_s: float = 60.0):
     steps = float(len(peaks))
     cadence = float(steps / duration * 60.0) if duration > 0 else np.nan
     mean_step_time = float(duration / steps) if steps > 0 and duration > 0 else np.nan
+    if sensor == "sacrum":
+        ten_start, ten_end, ten_duration, ten_cadence, ten_mean_step_time, sacrum_event_count = (
+            sacrum_walking_accel_event_summary(df, meta, t)
+        )
+    else:
+        sacrum_event_count = np.nan
+        ten_step_peak_count, ten_step_mode = walking_10_step_strategy(sensor)
+        if len(peaks) >= ten_step_peak_count:
+            ten_step_times = select_peak_time_window(t[peaks], ten_step_peak_count, ten_step_mode)
+        else:
+            ten_step_times = np.array([], dtype=float)
+        if len(ten_step_times) >= 2:
+            ten_start = float(ten_step_times[0])
+            ten_end = float(ten_step_times[-1])
+            ten_duration = float(ten_end - ten_start)
+            ten_cadence = float(10.0 / ten_duration * 60.0) if ten_duration > 0 else np.nan
+            ten_mean_step_time = float(ten_duration / 10.0) if ten_duration > 0 else np.nan
+        else:
+            ten_start = np.nan
+            ten_end = np.nan
+            ten_duration = np.nan
+            ten_cadence = np.nan
+            ten_mean_step_time = np.nan
     return {
         "start": float(t[0]),
         "end": float(t[0] + fixed_duration_s),
@@ -175,6 +287,12 @@ def walking_summary(df, meta, sensor: str, fixed_duration_s: float = 60.0):
         "step_count": steps,
         "cadence": cadence,
         "mean_step_time": mean_step_time,
+        "ten_step_start": ten_start,
+        "ten_step_end": ten_end,
+        "ten_step_duration": ten_duration,
+        "ten_step_count": 10.0 if np.isfinite(ten_duration) else np.nan,
+        "ten_step_cadence": ten_cadence,
+        "ten_step_mean_step_time": ten_mean_step_time,
     }
 
 
@@ -223,12 +341,12 @@ def turn_summary(df, meta, config, prefix: str):
         acc_turn = acc_signal[turn_mask]
         fs_turn = 1.0 / estimate_sampling_interval_s(t_turn) if len(t_turn) > 2 else meta.fs_hz
         if len(acc_turn) >= 3 and np.isfinite(fs_turn) and fs_turn > 0:
-            acc_turn_smooth = gaussian_filter1d(acc_turn, sigma=2)
-            step_threshold = float(np.nanpercentile(acc_turn_smooth, 60))
+            acc_turn_smooth = gaussian_filter1d(acc_turn, sigma=max(1, int(round(0.04 * fs_turn))))
+            step_threshold = float(np.nanpercentile(acc_turn_smooth, 50))
             peaks, _ = find_peaks(
                 acc_turn_smooth,
                 height=step_threshold,
-                distance=max(1, int(round(0.45 * fs_turn))),
+                distance=max(1, int(round(0.50 * fs_turn))),
             )
             steps = float(len(peaks))
     angular_stats = angular[turn_mask] if np.any(turn_mask) else angular
