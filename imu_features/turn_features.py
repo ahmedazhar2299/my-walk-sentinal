@@ -118,12 +118,24 @@ def extract_turn_features(df, meta, config, prefix):
         meta,
         config,
     )
+    stats_angular_abs = angular_abs
+    if "gyro_x" in df.columns:
+        stats_angular_abs = np.abs(df["gyro_x"].to_numpy(dtype=float))
+        if config.filtering.enabled and np.isfinite(meta.fs_hz):
+            stats_angular_abs = apply_lowpass_filter(
+                stats_angular_abs,
+                fs_hz=meta.fs_hz,
+                cutoff_hz=config.filtering.cutoff_hz,
+                order=config.filtering.order,
+            )
     pause_threshold = turn_threshold
     if np.any(turn_mask):
-        ang_abs_for_stats = angular_abs[turn_mask]
+        ang_abs_for_stats = stats_angular_abs[turn_mask]
+        ang_abs_for_pause = angular_abs[turn_mask]
         t_for_stats = time_s[turn_mask]
     else:
-        ang_abs_for_stats = angular_abs
+        ang_abs_for_stats = stats_angular_abs
+        ang_abs_for_pause = angular_abs
         t_for_stats = time_s
 
     out[f"{prefix}_duration"] = duration
@@ -133,14 +145,14 @@ def extract_turn_features(df, meta, config, prefix):
     out[f"{prefix}_step_count"] = _turn_step_count_from_acc(df, time_s, turn_mask, config)
 
     pause_min_duration_s = adaptive_pause_min_duration(
-        angular_velocity=ang_abs_for_stats,
+        angular_velocity=ang_abs_for_pause,
         time_s=t_for_stats,
         threshold=pause_threshold,
         beta=config.turn_pause.adaptive_beta,
     )
 
     _, pause_time = count_pauses(
-        angular_velocity=ang_abs_for_stats,
+        angular_velocity=ang_abs_for_pause,
         time_s=t_for_stats,
         threshold=pause_threshold,
         min_duration_s=pause_min_duration_s,

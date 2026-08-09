@@ -394,9 +394,9 @@ def _walk_summary_for_features(time_s, acc_signal, meta, config):
         threshold_k=config.window_gate.walk_threshold_k,
         fallback_min_amp=config.window_gate.walk_min_amp_threshold,
         min_duration_s=config.window_gate.walk_min_duration_s,
-        smooth_sigma=1.0,
+        smooth_sigma=2.0,
         min_peak_distance_s=0.3,
-        p2p_cap_scale=config.window_gate.p2p_cap_scale,
+        p2p_cap_scale=None,
     )
 
 
