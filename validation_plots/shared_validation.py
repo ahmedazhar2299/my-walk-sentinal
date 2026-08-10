@@ -742,7 +742,7 @@ def exact_compare_walk_summary(t, acc, fs_hz, prefix='walk_compare'):
         threshold_k=params["threshold_k"],
         fallback_min_amp=params["fallback_min_amp"],
         min_duration_s=float(PLOT_PARAMS.get("window_gate", {}).get("walk_min_duration_s", 1.0)),
-        smooth_sigma=2.0,
+        smooth_sigma=3.0,
         min_peak_distance_s=0.3,
         p2p_cap_scale=None,
     )
