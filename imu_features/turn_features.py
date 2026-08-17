@@ -59,28 +59,34 @@ def _turn_step_count_from_acc(df, time_s, turn_mask, config):
     if not np.isfinite(acc_turn_smooth).any():
         return np.nan
 
-    threshold = float(np.nanpercentile(acc_turn_smooth, 60))
+    peak_percentile = float(getattr(config.window_gate, "turn_step_peak_percentile", 55.0))
+    threshold = float(np.nanpercentile(acc_turn_smooth, peak_percentile))
     if not np.isfinite(threshold):
         return np.nan
 
-    min_distance = max(1, int(0.45 * fs_turn))
+    min_interval_s = float(getattr(config.window_gate, "turn_step_min_interval_s", 0.50))
+    min_distance = max(1, int(min_interval_s * fs_turn))
     peaks, _ = find_peaks(acc_turn_smooth, height=threshold, distance=min_distance)
     return float(len(peaks))
 
 
-def _turn_window_from_gyro_y(df, meta, config):
+def _turn_window_from_gyro_magnitude(df, meta, config):
     time_s = df["time_s"].to_numpy(dtype=float)
-    if "gyro_y" in df.columns:
-        angular_signal = np.abs(df["gyro_y"].to_numpy(dtype=float))
-        if config.filtering.enabled and np.isfinite(meta.fs_hz):
-            angular_signal = apply_lowpass_filter(
-                angular_signal,
-                fs_hz=meta.fs_hz,
-                cutoff_hz=config.filtering.cutoff_hz,
-                order=config.filtering.order,
-            )
-    else:
+    if "gyro_mag" in df.columns:
         angular_signal = df["gyro_mag"].to_numpy(dtype=float)
+    else:
+        angular_signal = np.sqrt(
+            df["gyro_x"].to_numpy(dtype=float) ** 2
+            + df["gyro_y"].to_numpy(dtype=float) ** 2
+            + df["gyro_z"].to_numpy(dtype=float) ** 2
+        )
+    if config.filtering.enabled and np.isfinite(meta.fs_hz):
+        angular_signal = apply_lowpass_filter(
+            angular_signal,
+            fs_hz=meta.fs_hz,
+            cutoff_hz=config.filtering.cutoff_hz,
+            order=config.filtering.order,
+        )
 
     threshold = 0.25 * float(np.nanmax(angular_signal)) if np.isfinite(angular_signal).any() else np.nan
     active = np.isfinite(angular_signal) & np.isfinite(threshold) & (angular_signal >= threshold)
@@ -113,7 +119,7 @@ def extract_turn_features(df, meta, config, prefix):
     df, meta = truncate_activity_dataframe(df, meta, activity)
     out = build_nan_feature_dict(names)
     time_s = df["time_s"].to_numpy(dtype=float)
-    angular_abs, start_t, end_t, duration, turn_mask, turn_threshold = _turn_window_from_gyro_y(
+    angular_abs, start_t, end_t, duration, turn_mask, turn_threshold = _turn_window_from_gyro_magnitude(
         df,
         meta,
         config,

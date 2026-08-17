@@ -52,6 +52,8 @@ class WindowGateConfig:
     walk_threshold_k: float = 0.25
     turn_min_amp_threshold: float = 0.1  # fallback only if robust p2p threshold cannot be computed
     turn_threshold_k: float = 5.0
+    turn_step_peak_percentile: float = 55.0
+    turn_step_min_interval_s: float = 0.50
     transition_min_amp_threshold: float = 0.1  # fallback only if robust p2p threshold cannot be computed
     transition_threshold_k: float = 3.0
     walk_min_duration_s: float = 1.0

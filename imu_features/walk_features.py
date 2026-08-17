@@ -23,6 +23,19 @@ WALK_FEATURE_NAMES = [
     "cadence",
     "walking_speed",
     "mean_step_time",
+    "walk_10_step_start_time",
+    "walk_10_step_end_time",
+    "walk_10_step_duration",
+    "walk_10_step_count",
+    "walk_10_step_cadence",
+    "walk_10_step_mean_step_time",
+    "walk_10_step_time_cv",
+    "walk_task_duration",
+    "walk_task_cadence",
+    "walk_task_mean_step_time",
+    "walk_protocol_duration",
+    "walk_protocol_cadence",
+    "walk_protocol_mean_step_time",
     "step_time_std",
     "step_time_cv",
     "step_regularity",
@@ -400,6 +413,76 @@ def _walk_summary_for_features(time_s, acc_signal, meta, config):
     )
 
 
+def _select_ten_step_window(peak_times, start_t=np.nan, end_t=np.nan, target_steps=10):
+    peak_times = np.asarray(peak_times, dtype=float)
+    peak_times = peak_times[np.isfinite(peak_times)]
+    if len(peak_times) < target_steps + 1:
+        return {
+            "walk_10_step_start_time": np.nan,
+            "walk_10_step_end_time": np.nan,
+            "walk_10_step_duration": np.nan,
+            "walk_10_step_count": np.nan,
+            "walk_10_step_cadence": np.nan,
+            "walk_10_step_mean_step_time": np.nan,
+            "walk_10_step_time_cv": np.nan,
+        }
+
+    peak_times = np.sort(peak_times)
+    if np.isfinite(start_t):
+        peak_times = peak_times[peak_times >= start_t]
+    if np.isfinite(end_t):
+        peak_times = peak_times[peak_times <= end_t]
+    if len(peak_times) < target_steps + 1:
+        return {
+            "walk_10_step_start_time": np.nan,
+            "walk_10_step_end_time": np.nan,
+            "walk_10_step_duration": np.nan,
+            "walk_10_step_count": np.nan,
+            "walk_10_step_cadence": np.nan,
+            "walk_10_step_mean_step_time": np.nan,
+            "walk_10_step_time_cv": np.nan,
+        }
+
+    candidates = []
+    for i in range(0, len(peak_times) - target_steps):
+        window = peak_times[i : i + target_steps + 1]
+        intervals = np.diff(window)
+        duration = float(window[-1] - window[0])
+        if not np.isfinite(duration) or duration <= 0:
+            continue
+        cadence = float(target_steps / duration * 60.0)
+        mean_step = float(duration / target_steps)
+        step_std = float(np.nanstd(intervals))
+        step_cv = step_std / mean_step if mean_step > 0 else np.nan
+        if not (30.0 <= cadence <= 180.0):
+            continue
+        if np.nanmin(intervals) < 0.25 or np.nanmax(intervals) > 2.5:
+            continue
+        center = 0.5 * (window[0] + window[-1])
+        bout_center = 0.5 * (float(start_t) + float(end_t)) if np.isfinite(start_t) and np.isfinite(end_t) else center
+        center_distance = abs(center - bout_center)
+        candidates.append((step_cv, center_distance, duration, window, cadence, mean_step))
+
+    if not candidates:
+        window = peak_times[: target_steps + 1]
+        duration = float(window[-1] - window[0])
+        cadence = float(target_steps / duration * 60.0) if duration > 0 else np.nan
+        mean_step = float(duration / target_steps) if duration > 0 else np.nan
+        step_cv = float(np.nanstd(np.diff(window)) / mean_step) if np.isfinite(mean_step) and mean_step > 0 else np.nan
+    else:
+        step_cv, _, duration, window, cadence, mean_step = sorted(candidates, key=lambda item: (item[0], item[1]))[0]
+
+    return {
+        "walk_10_step_start_time": float(window[0]),
+        "walk_10_step_end_time": float(window[-1]),
+        "walk_10_step_duration": float(duration),
+        "walk_10_step_count": float(target_steps),
+        "walk_10_step_cadence": float(cadence),
+        "walk_10_step_mean_step_time": float(mean_step),
+        "walk_10_step_time_cv": float(step_cv),
+    }
+
+
 def extract_walk_features(df, meta, config):
     """Extract gait and signal features from walk activity."""
     if df is None or meta is None or len(df) < config.min_rows_per_activity:
@@ -441,6 +524,27 @@ def extract_walk_features(df, meta, config):
     out["cadence"] = cadence if np.isfinite(cadence) else (
         60.0 * step_count / duration if np.isfinite(duration) and duration > 0 else np.nan
     )
+    finite_time = time_s[np.isfinite(time_s)]
+    task_duration = float(finite_time[-1] - finite_time[0]) if len(finite_time) >= 2 else np.nan
+    out["walk_task_duration"] = task_duration
+    out["walk_task_cadence"] = (
+        60.0 * step_count / task_duration
+        if np.isfinite(step_count) and np.isfinite(task_duration) and task_duration > 0
+        else np.nan
+    )
+    out["walk_task_mean_step_time"] = (
+        task_duration / step_count
+        if np.isfinite(step_count) and step_count > 0 and np.isfinite(task_duration) and task_duration > 0
+        else np.nan
+    )
+    protocol_duration = 30.0
+    out["walk_protocol_duration"] = protocol_duration
+    out["walk_protocol_cadence"] = (
+        60.0 * step_count / protocol_duration if np.isfinite(step_count) else np.nan
+    )
+    out["walk_protocol_mean_step_time"] = (
+        protocol_duration / step_count if np.isfinite(step_count) and step_count > 0 else np.nan
+    )
     out["walking_speed"] = (
         config.walk_distance_m / duration if np.isfinite(duration) and duration > 0 else np.nan
     )
@@ -448,6 +552,7 @@ def extract_walk_features(df, meta, config):
     step_time_mean = np.nan
     peak_times = np.asarray(wavelet.get("peak_times", []), dtype=float)
     peak_times = peak_times[np.isfinite(peak_times)]
+    out.update(_select_ten_step_window(peak_times, start_t=start_t, end_t=end_t, target_steps=10))
     if len(peak_times) >= 2:
         step_times = np.diff(peak_times)
     else:
