@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import date, datetime
 from pathlib import Path
 from typing import Awaitable, Callable, TypeVar
 
@@ -42,6 +42,9 @@ class ScraperConfig:
     log_level: str
     user_agent: str
     overwrite_patient_dir: bool
+    start_date: date | None
+    end_date: date | None
+    skip_existing_dates: bool
 
     @classmethod
     def from_env(
@@ -52,6 +55,9 @@ class ScraperConfig:
         output_root: Path | None = None,
         log_level: str | None = None,
         overwrite_patient_dir: bool | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        skip_existing_dates: bool | None = None,
     ) -> "ScraperConfig":
         load_dotenv()
         username = os.getenv("USERNAME")
@@ -78,7 +84,14 @@ class ScraperConfig:
             overwrite_patient_dir=(
                 overwrite_patient_dir
                 if overwrite_patient_dir is not None
-                else env_bool("OVERWRITE_PATIENT_DIR", True)
+                else env_bool("OVERWRITE_PATIENT_DIR", False)
+            ),
+            start_date=parse_iso_date(start_date or os.getenv("START_DATE")),
+            end_date=parse_iso_date(end_date or os.getenv("END_DATE")),
+            skip_existing_dates=(
+                skip_existing_dates
+                if skip_existing_dates is not None
+                else env_bool("SKIP_EXISTING_DATES", True)
             ),
         )
 
@@ -98,6 +111,9 @@ class ScraperConfig:
         self.patient_output_dir.mkdir(parents=True, exist_ok=True)
         self.staging_dir.mkdir(parents=True, exist_ok=True)
         self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+
+    def with_user_id(self, user_id: str) -> "ScraperConfig":
+        return replace(self, user_id=str(user_id))
 
     async def failure_screenshot(self, page: Page, label: str) -> Path:
         self.screenshot_dir.mkdir(parents=True, exist_ok=True)
@@ -149,7 +165,7 @@ def normalize_workout_type(raw: str) -> str | None:
     return None
 
 
-def recorded_date(recorded_time: str) -> str:
+def recorded_datetime(recorded_time: str) -> datetime:
     text = normalize_recorded_time(recorded_time)
     for fmt in (
         "%Y-%m-%d %H:%M:%S",
@@ -166,13 +182,23 @@ def recorded_date(recorded_time: str) -> str:
         "%b %d, %Y %I %p",
     ):
         try:
-            return datetime.strptime(text, fmt).date().isoformat()
+            return datetime.strptime(text, fmt)
         except ValueError:
             pass
     match = re.search(r"\d{4}[-/]\d{2}[-/]\d{2}", text)
     if not match:
         raise ValueError(f"Could not extract date from Recorded Time: {recorded_time!r}")
-    return match.group(0).replace("/", "-")
+    return datetime.strptime(match.group(0).replace("/", "-"), "%Y-%m-%d")
+
+
+def recorded_date(recorded_time: str) -> str:
+    return recorded_datetime(recorded_time).date().isoformat()
+
+
+def parse_iso_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    return date.fromisoformat(value)
 
 
 def normalize_recorded_time(recorded_time: str) -> str:

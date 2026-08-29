@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
 
 from playwright.async_api import Locator, Page
 
@@ -15,6 +17,7 @@ from scraper.utils import (
     header_lookup,
     normalize_workout_type,
     recorded_date,
+    recorded_datetime,
     table_headers,
 )
 
@@ -27,6 +30,7 @@ class ActivityRecord:
     row: Locator
     patient_name: str
     recorded_time: str
+    recorded_date: date
     workout_type_raw: str
     workout_type: str
 
@@ -42,12 +46,32 @@ class ActivityScraper:
         await close_popups(self.page)
 
         downloaded = 0
+        skipped_existing_dates: set[date] = set()
+        skipped_out_of_range = 0
         for page_number in range(1, 100_000):
             LOGGER.info("Scanning Exercise Data List page %s", page_number)
             table = await self._current_table()
+            page_dates = await self._table_record_dates(table)
+            if page_dates and all(self._is_before_start(record_date) for record_date in page_dates):
+                LOGGER.info(
+                    "All records on page %s are before %s; stopping pagination.",
+                    page_number,
+                    self.config.start_date,
+                )
+                break
+
             records = await self._matching_records(table, full_name)
+            if records and all(self._is_before_start(record.recorded_date) for record in records):
+                LOGGER.info("All matching records on page %s are before %s; stopping pagination.", page_number, self.config.start_date)
+                break
 
             for record in records:
+                if not self._record_in_date_window(record.recorded_date):
+                    skipped_out_of_range += 1
+                    continue
+                if self.config.skip_existing_dates and self._date_already_downloaded(record.recorded_date):
+                    skipped_existing_dates.add(record.recorded_date)
+                    continue
                 try:
                     await self._download_record(record)
                     downloaded += 1
@@ -58,6 +82,14 @@ class ActivityScraper:
             if not await self._next_page():
                 break
 
+        if skipped_existing_dates:
+            LOGGER.info(
+                "Skipped %s existing date(s): %s",
+                len(skipped_existing_dates),
+                ", ".join(sorted(d.isoformat() for d in skipped_existing_dates)),
+            )
+        if skipped_out_of_range:
+            LOGGER.info("Skipped %s record(s) outside requested date window.", skipped_out_of_range)
         return downloaded
 
     async def _open_exercise_data_list(self) -> None:
@@ -96,15 +128,39 @@ class ActivityScraper:
                 continue
 
             recorded_time = self._cell(cells, recorded_index, "")
+            try:
+                record_dt = recorded_datetime(recorded_time)
+            except ValueError:
+                LOGGER.warning("Skipping record with unparseable Recorded Time %r for %s", recorded_time, full_name)
+                continue
+
             workout_type_raw = self._cell(cells, workout_index, "")
             workout_type = normalize_workout_type(workout_type_raw)
             if not workout_type:
                 LOGGER.warning("Skipping unknown workout type %r for %s at %s", workout_type_raw, full_name, recorded_time)
                 continue
 
-            records.append(ActivityRecord(row, patient_name, recorded_time, workout_type_raw, workout_type))
+            records.append(ActivityRecord(row, patient_name, recorded_time, record_dt.date(), workout_type_raw, workout_type))
         LOGGER.info("Found %s matching records for %s on current page", len(records), full_name)
         return records
+
+    async def _table_record_dates(self, table: Locator) -> list[date]:
+        headers = await table_headers(table)
+        recorded_index = header_lookup(headers, ["Recorded Time", "Record Time", "Created At", "Date"])
+        if recorded_index is None:
+            return []
+
+        dates: list[date] = []
+        rows = table.locator("tbody tr")
+        for i in range(await rows.count()):
+            cells = [clean_cell_text(text) for text in await rows.nth(i).locator("td").all_inner_texts()]
+            if recorded_index >= len(cells):
+                continue
+            try:
+                dates.append(recorded_datetime(cells[recorded_index]).date())
+            except ValueError:
+                continue
+        return dates
 
     async def _download_record(self, record: ActivityRecord) -> None:
         date = recorded_date(record.recorded_time)
@@ -206,3 +262,21 @@ class ActivityScraper:
         if index is None or index >= len(cells):
             return default
         return cells[index]
+
+    def _record_in_date_window(self, record_date: date) -> bool:
+        if self.config.start_date and record_date < self.config.start_date:
+            return False
+        if self.config.end_date and record_date > self.config.end_date:
+            return False
+        return True
+
+    def _is_before_start(self, record_date: date) -> bool:
+        return self.config.start_date is not None and record_date < self.config.start_date
+
+    def _date_already_downloaded(self, record_date: date) -> bool:
+        date_dir = self.config.patient_output_dir / record_date.isoformat()
+        return date_dir.exists() and any(self._iter_csv_files(date_dir))
+
+    @staticmethod
+    def _iter_csv_files(date_dir: Path):
+        yield from date_dir.rglob("*.csv")
