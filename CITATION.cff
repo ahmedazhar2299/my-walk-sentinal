@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+title: "Validation of IMU Derived Mobility Features for Stroke Assessment"
+message: "If you use this code, please cite this repository and the associated paper."
+type: software
+authors:
+  - family-names: Ahmed
+    given-names: Muhammad
+  - family-names: Gibson
+    given-names: Mo
+  - family-names: Soangra
+    given-names: Rahul
+  - family-names: Krishnan
+    given-names: Vennila
+repository-code: "https://github.com/ahmedazhar2299/my-walk-sentinal"
+version: "v0.1.0-manuscript"
+date-released: "2026-09-08"
+license: MIT
+keywords:
+  - stroke
+  - inertial measurement unit
+  - IMU
+  - Vicon
+  - XSENS
+  - gait
+  - mobility assessment
