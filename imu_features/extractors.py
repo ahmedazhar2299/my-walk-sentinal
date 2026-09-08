@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 
 from .config import PipelineConfig
-from .qc import QC_SCORE_COLUMNS, add_qc_scores, load_qc_thresholds
 from .transition_features import (
     extract_transition_features,
     transition_flexion_extension_peaks,
@@ -270,7 +269,6 @@ def _transition_xcorr_data_from_activity(activity_data, config, verbose):
 
 def _dataset_columns():
     columns = ["patient_id", "date"]
-    columns.extend(QC_SCORE_COLUMNS)
     columns.extend(WALK_DATASET_FEATURE_NAMES)
     columns.extend(turn_feature_names("left_turn"))
     columns.extend(turn_feature_names("right_turn"))
@@ -363,7 +361,6 @@ def extract_dataset_features(
         else:
             print(f"[INFO] Found {len(folders)} date folders for patient folder {patient_folder}")
 
-    qc_thresholds = load_qc_thresholds()
     rows = []
     for patient_id, date_str, date_dir in folders:
         activity_files = resolve_activity_files(date_dir)
@@ -400,7 +397,6 @@ def extract_dataset_features(
             _transition_xcorr_data_from_activity(activity_data.get("stand_to_sit"), config, verbose),
             prefix="sitstand_standsit",
         ))
-        add_qc_scores(row, qc_thresholds)
         rows.append(row)
 
         if verbose:

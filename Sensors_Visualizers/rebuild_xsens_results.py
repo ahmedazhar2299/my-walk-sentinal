@@ -29,7 +29,9 @@ from imu_features.utils import (
 
 
 HERE = Path(__file__).resolve().parent
-ROOT = Path("Data_Sensors/Converted Files_synchronized")
+ROOT = Path("Data_Sensors/XSENS_synchronized")
+if not ROOT.exists():
+    ROOT = Path("Data_Sensors/Converted Files_synchronized")
 SENSORS = ("right", "left", "trunk", "sacrum")
 
 

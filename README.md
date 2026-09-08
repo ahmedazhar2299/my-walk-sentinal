@@ -1,227 +1,135 @@
-# IMU Feature Extraction Pipeline
+# MyWalkSentinel IMU Feature Extraction
 
-This project extracts one feature row per `patient_id/date` from synchronized IMU activity CSV files. The CSV output is aligned with the feature tables used in:
+This repository provides the feature extraction and validation code used for the MyWalkSentinel stroke mobility study. The code supports two analysis workflows:
 
-- `walk_validation.ipynb`
-- `turn_validation.ipynb`
-- `transition_validation.ipynb`
+- smartphone-derived home mobility features from repeated unsupervised recordings
+- laboratory validation using XSENS IMU recordings and Vicon motion-capture reference data
 
-The default output is `features_dataset.csv`.
+The repository does not include participant data or generated result tables. Study data are stored separately because they contain controlled research data. Access to the data files can be requested from the authors. After access is granted, place the downloaded folders in the structure shown below and rerun the commands in this README.
 
-## Setup
+## 1. Install Packages
 
-From the repo root:
+From the repository root:
 
 ```bash
-python3 -m venv env
-source env/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements-feature-pipeline.txt
 ```
 
-Run extraction:
-
-Single patient folder:
+For notebook-based visualization:
 
 ```bash
-env/bin/python extract_features.py --dataset-root Data --patient-folder patient_77 --output-csv features_dataset_77.csv
+pip install notebook jupyterlab
+jupyter lab
 ```
 
-You can also pass a folder path directly to extract multiple patients feature set:
+## 2. Data Folder Structure
 
-```bash
-env/bin/python extract_features.py --dataset-root Data --output-csv features_dataset.csv --skip-checks
-```
-
-Optional config override:
-
-```bash
-env/bin/python extract_features.py --dataset-root Data --output-csv features_dataset.csv --config-json config_example.json
-```
-
-## Project Structure
-
-- `extract_features.py`: command-line entry point for full extraction and validation checks.
-- `imu_features/config.py`: config dataclasses and optional JSON override loader.
-- `imu_features/utils.py`: preprocessing, filtering, file discovery, wavelet helpers, and shared metrics.
-- `imu_features/walk_features.py`: walking linear and nonlinear feature extraction.
-- `imu_features/turn_features.py`: left/right turn feature extraction.
-- `imu_features/transition_features.py`: sit-to-stand and stand-to-sit feature extraction.
-- `imu_features/extractors.py`: patient/date loop, feature merging, symmetry features, and CSV writing.
-- `validation_plots/`: plotting helpers used by the notebooks.
-
-## Data Layout
-
-The extractor scans `Data/<patient_id>/<date>/...` and writes one row per patient/date.
-With `--patient-folder`, it scans all date folders under only that patient folder.
-
-It supports both flat files and nested synchronized files. Examples:
+Place the downloaded data in these folders:
 
 ```text
-Data/patient_103/2026-03-08/walk.csv
-Data/patient_103/2026-03-08/left_turn.csv
-Data/patient_111/2026-04-28/Activity_2/sit_stand/synchronized/sit_to_stand_synchronized.csv
+Home_Smartphone_Data/                    smartphone recordings arranged by participant and date
+subjects.json                            maps SRS participant IDs to smartphone source IDs
+Data_Sensors/XSENS_synchronized/         synchronized laboratory XSENS IMU files
+Data_Sensors/Vicon_CSV_Files/            Vicon marker trajectory CSV files
 ```
 
-Recognized activity aliases:
+Reference Vicon annotation data used to evaluate the XSENS features can be requested from the authors.
 
-- Walk: `walk`, `10_mw`
-- Left turn: `left_turn`, `360_LeftTurn`
-- Right turn: `right_turn`, `360_RightTurn`
-- Sit-to-stand: `sit_to_stand`, `sit_stand`
-- Stand-to-sit: `stand_to_sit`, `stand_sit`
-
-Synchronized CSVs are preferred when both raw and synchronized files exist.
-
-## Long Recording Truncation
-
-Some sensor files can keep recording after the activity is over. Before plotting or extracting features, the code uses a simple fixed-range rule from the end of the file:
-
-- Walk: files up to `31s` are unchanged; longer files keep the last `31s`.
-- Left/right turn: files up to `11s` are unchanged; longer files keep the last `11s`.
-- Sit-to-stand / stand-to-sit: files up to `17s` are unchanged; longer files keep the last `17s`.
-
-After truncation, `time_s` is reset so plots start at `0s`.
-
-This selected segment is used everywhere: raw accelerometer/gyroscope/user-accelerometer plots, wavelet/FFT/jerk plots, cross-correlation comparisons, and all feature tables.
-
-## Preprocessing
-
-For each activity CSV:
-
-1. Map sensor columns to canonical names.
-2. Convert timestamps to seconds.
-3. Sort by time and average duplicate timestamps.
-4. Interpolate/forward-fill/back-fill missing sensor samples.
-5. Compute magnitudes:
-   - `acc_mag = sqrt(accel_x^2 + accel_y^2 + accel_z^2)`
-   - `useracc_mag = sqrt(useracc_x^2 + useracc_y^2 + useracc_z^2)`
-   - `gyro_mag = sqrt(gyro_x^2 + gyro_y^2 + gyro_z^2)`
-6. Estimate sampling frequency from median timestamp spacing.
-7. Optionally apply a Butterworth low-pass filter.
-8. Compute jerk using `np.gradient(signal, time_s)`.
-
-## Output Format
-
-`features_dataset.csv` is a wide table:
+Expected smartphone layout:
 
 ```text
-patient_id, date, [walk features], [turn features], [sit/stand features]
+Home_Smartphone_Data/patient_<id>/<recording_date>/...
 ```
 
-The current extraction includes:
+or, if the smartphone files have already been renamed by study ID:
 
-### Walking
+```text
+Home_Smartphone_Data/SRS01/<recording_date>/...
+Home_Smartphone_Data/SRS02/<recording_date>/...
+```
 
-Linear features:
+The extraction script accepts either layout.
 
-- `walk_duration`
-- `step_count`
-- `cadence`
-- `walking_speed`
-- `mean_step_time`
-- `step_time_std`
-- `step_time_cv`
-- `step_regularity`
-- `stride_regularity`
-- `walk_acc_mag_mean`
-- `walk_acc_mag_std`
-- `walk_acc_mag_rms`
-- `walk_gyro_mag_std`
-- `walk_dominant_frequency`
-- `walk_jerk_mean`
-- `walk_jerk_std`
+## 3. Build Smartphone Feature Dataset
 
-Nonlinear features:
-
-- `walk_spectral_entropy`
-- `approximate_entropy`
-- `sample_entropy`
-- `symbolic_entropy`
-- `permutation_entropy`
-- `rosenstein_lyapunov_exponent`
-- `wolf_lyapunov_exponent`
-- `rqa_REC`
-- `rqa_DET`
-- `rqa_LAM`
-- `rqa_MeanL`
-- `rqa_MaxL`
-- `rqa_EntrL`
-- `rqa_EntrV`
-- `rqa_EntrW`
-
-### Turns
-
-For both `left_turn_*` and `right_turn_*`:
-
-- `duration`
-- `mean_angular_velocity`
-- `peak_angular_velocity`
-- `ang_vel_std`
-- `step_count`
-- `pause_time`
-- `jerk_std`
-- `entropy`
-
-Turn step count is estimated from acceleration peaks inside the gyro-detected turn start/end window.
-
-Turn comparison features:
-
-- `turn_duration_difference`
-- `turn_velocity_difference`
-- `turn_pause_difference`
-- `abs_turn_duration_difference`
-- `abs_turn_velocity_difference`
-- `abs_turn_pause_difference`
-- `turn_left_right_xcorr_symmetry_score`
-- `turn_left_right_xcorr_peak_correlation`
-
-The cross-correlation features resample each detected turn to a 0 to 100 percent movement cycle before computing normalized cross-correlation.
-
-### Sit-To-Stand / Stand-To-Sit
-
-For both `sit_to_stand_*` and `stand_to_sit_*`:
-
-- `duration`
-- `time_to_peak_acc`
-- `peak_acc`
-- `flexion_peak`
-- `extension_peak`
-- `peak_gyro`
-- `acc_rms`
-- `jerk_mean`
-- `jerk_std`
-- `peak_count`
-- `entropy`
-
-Flexion is the maximum value of the selected dominant signed gyro axis inside the detected transition region. Extension is the minimum value of that same signal. End time is refined after the later of the flexion/extension peaks.
-
-Transition comparison features:
-
-- `sitstand_standsit_xcorr_symmetry_score`
-- `sitstand_standsit_xcorr_peak_correlation`
-
-These are also computed after resampling each transition to a 0 to 100 percent movement cycle.
-
-## Validation Notebooks
-
-Use these notebooks to inspect individual signals, windows, and plots:
-
-- `walk_validation.ipynb`
-- `turn_validation.ipynb`
-- `transition_validation.ipynb`
-
-The CSV extractor uses the same core feature functions as the notebook feature tables.
-
-## Validation Checks
-
-By default, `extract_features.py` checks for:
-
-- duplicate `patient_id/date` rows
-- rows where all features are `NaN`
-- high missingness in key duration features
-
-Skip checks with:
+Run:
 
 ```bash
-env/bin/python extract_features.py --dataset-root Data --output-csv features_dataset.csv --skip-checks
+python scripts/build_home_features.py \
+  --dataset-root Home_Smartphone_Data \
+  --subjects-json subjects.json \
+  --output-csv features_dataset.csv \
+  --per-subject-dir feature_datasets_by_subject
+```
+
+This creates:
+
+```text
+features_dataset.csv
+feature_datasets_by_subject/SRS01.csv
+feature_datasets_by_subject/SRS02.csv
+...
+```
+
+`features_dataset.csv` contains one row per participant recording day.
+
+## 4. Build Laboratory Validation Files
+
+Rebuild XSENS laboratory feature tables:
+
+```bash
+python Sensors_Visualizers/rebuild_xsens_trial_results.py \
+  --root Data_Sensors/XSENS_synchronized \
+  --output-dir Sensors_Visualizers/XSENS_results
+```
+
+The laboratory agreement notebook uses the XSENS result tables together with the reference Vicon annotation data provided by the authors:
+
+```text
+Sensors_Visualizers/XSENS_results/
+Sensors_Visualizers/imu_vicon_features.csv
+```
+
+## 5. Run Agreement and Repeatability Analyses
+
+Open:
+
+```text
+Sensors_Visualizers/participant_agreement.ipynb
+```
+
+This notebook compares XSENS-derived IMU features with Vicon motion-capture reference measures for the laboratory tasks.
+
+Open:
+
+```text
+Sensors_Visualizers/rq2_home_repeatability.ipynb
+```
+
+This notebook evaluates repeatability of smartphone-derived home mobility features across repeated recordings.
+
+## 6. Visualize Individual Recordings
+
+Smartphone examples:
+
+```text
+walk_validation.ipynb
+turn_validation.ipynb
+transition_validation.ipynb
+```
+
+Laboratory XSENS examples:
+
+```text
+Sensors_Visualizers/walking_multi_sensor_visualizer.ipynb
+Sensors_Visualizers/turn_multi_sensor_visualizer.ipynb
+Sensors_Visualizers/sit_to_stand_multi_sensor_visualizer.ipynb
+```
+
+Vicon marker trajectory examples:
+
+```text
+Sensors_Visualizers/vicon_visualizer.ipynb
 ```
