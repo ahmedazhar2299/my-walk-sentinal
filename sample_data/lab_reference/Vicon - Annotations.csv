@@ -1,0 +1,3 @@
+subject_id,visit_id,walk_10_step_start_s,walk_10_step_end_s,walk_10_step_duration_s,walk_10_step_count,walk_10_step_cadence_steps_min,walk_10_step_mean_step_time_s,left_turn_start_s,left_turn_end_s,left_turn_duration_s,left_turn_time_to_peak_s,left_turn_step_count,right_turn_start_s,right_turn_end_s,right_turn_duration_s,right_turn_time_to_peak_s,right_turn_step_count,sts_start_s,sts_end_s,sts_duration_s,sts_time_to_peak_s
+SRS01,V01,0.800000,7.000000,6.200000,10,96.774194,0.620000,0.700000,5.800000,5.100000,2.400000,4,0.700000,5.900000,5.200000,2.500000,5,1.700000,4.200000,2.500000,1.200000
+SRS02,V01,0.800000,7.250000,6.450000,10,93.023256,0.645000,0.700000,5.900000,5.200000,2.400000,5,0.700000,6.050000,5.350000,2.500000,6,1.700000,4.300000,2.600000,1.200000

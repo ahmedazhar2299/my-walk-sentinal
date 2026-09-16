@@ -17,8 +17,11 @@ project_filebrowser.db
 *.zip
 *.docx
 
+!/sample_data/**/*.csv
+
 /features_dataset.csv
 /feature_datasets_by_subject/
+/sample_outputs/
 /validation_outputs/
 /Sensors_Visualizers/XSENS_results/
 /Sensors_Visualizers/*results*.csv

@@ -7,6 +7,33 @@ This repository provides the feature extraction and validation code used for the
 
 The repository does not include participant data or generated result tables. Study data are stored separately because they contain controlled research data. Access to the data files can be requested from the authors. After access is granted, place the downloaded folders in the structure shown below and rerun the commands in this README.
 
+## Sample Data
+
+The repository includes a small synthetic dataset in `sample_data/` so the workflow can be tested without controlled participant data. These files are not study recordings and should not be used for scientific interpretation. They only reproduce the expected folder structure and CSV columns.
+
+Run the home feature extraction smoke test:
+
+```bash
+python scripts/build_home_features.py \
+  --dataset-root sample_data/home_smartphone \
+  --subjects-json sample_data/subjects_sample.json \
+  --output-csv sample_outputs/features_dataset_sample.csv \
+  --per-subject-dir sample_outputs/feature_datasets_by_subject \
+  --coverage-csv sample_outputs/home_recording_coverage_30day_sample.csv
+```
+
+Run the laboratory XSENS smoke test:
+
+```bash
+python Sensors_Visualizers/rebuild_xsens_trial_results.py \
+  --root sample_data/lab/XSENS_synchronized \
+  --output-dir sample_outputs/XSENS_results
+```
+
+The folder `sample_data/lab_reference/` contains small Vicon-style annotation tables that show the expected reference-table format for laboratory agreement analysis.
+
+If you have access to the approved study data, replace the sample folders with the real data folders described below and run the same commands with the study-data paths.
+
 ## 1. Install Packages
 
 From the repository root:
