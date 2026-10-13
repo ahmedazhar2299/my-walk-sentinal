@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: "Validation of IMU Derived Mobility Features for Stroke Assessment"
+title: "From Laboratory to Home: Agreement and Repeatability of IMU-Derived Walking, Turning, and Sit-to-Stand Mobility Markers After Stroke"
 message: "If you use this code, please cite this repository and the associated paper."
 type: software
 authors:
