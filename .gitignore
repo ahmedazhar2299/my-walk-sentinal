@@ -17,8 +17,6 @@ project_filebrowser.db
 *.zip
 *.docx
 
-!/sample_data/**/*.csv
-
 /features_dataset.csv
 /feature_datasets_by_subject/
 /sample_outputs/
