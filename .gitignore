@@ -32,3 +32,8 @@ project_filebrowser.db
 /Data_*
 /Stroke
 /anaconda_projects
+
+# Stroke foundation-model project downloads and local caches
+data/public_stroke/
+models/
+checkpoints/

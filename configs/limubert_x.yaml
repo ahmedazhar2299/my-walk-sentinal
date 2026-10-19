@@ -1,0 +1,28 @@
+model:
+  name: LIMU-BERT-X
+  repo_path: models/LIMU-BERT-X
+  checkpoint: models/LIMU-BERT-X/weights/limu_bert_x.pt
+  fine_tuning_entry_point: models/LIMU-BERT-X/pretrain.py
+  classifier_entry_point: models/LIMU-BERT-X/bert_classifier.py
+  architecture: base_v4
+
+input:
+  channels:
+    - accel_x
+    - accel_y
+    - accel_z
+    - gyro_x
+    - gyro_y
+    - gyro_z
+  channel_order: TODO
+
+preprocessing:
+  target_sampling_rate_hz: null
+  sequence_length_samples: 20
+  window_seconds: null
+
+training:
+  device: auto
+  batch_size: 32
+  learning_rate: 0.0001
+  epochs: 30
