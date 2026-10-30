@@ -14,12 +14,12 @@ input:
     - gyro_x
     - gyro_y
     - gyro_z
-  channel_order: TODO
+  channel_order: [accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z]
 
 preprocessing:
-  target_sampling_rate_hz: null
+  target_sampling_rate_hz: 20
   sequence_length_samples: 20
-  window_seconds: null
+  window_seconds: 1
 
 training:
   device: auto

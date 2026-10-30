@@ -1,0 +1,5 @@
+torch==2.15.0
+numpy==2.4.6
+transformers==4.56.0
+granite-tsfm==0.3.2
+lmdb==3.0.0
