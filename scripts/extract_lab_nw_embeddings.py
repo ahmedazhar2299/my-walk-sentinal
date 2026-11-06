@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Extract LIMU-BERT-X and HART embeddings from lab NW sacrum recordings.
+"""Extract LIMU-BERT-X and multichannel HART embeddings from lab NW recordings.
 
 This script performs inference only. It keeps every NW recording separate,
 uses the model-specific sampling/windowing used during public-stroke training,
-and writes one row per window (and, for HART, sensor axis).
+and writes one row per window. HART receives all six axes jointly.
 """
 
 from __future__ import annotations
@@ -120,25 +120,25 @@ def prepare_hart_windows(records: list[Path], input_root: Path) -> tuple[np.ndar
     for path in records:
         values, _, timestamp_wraps = read_and_resample(path, 30)
         metadata = recording_metadata(path, input_root)
-        for channel_index, channel_name in enumerate(HART_CHANNELS):
-            series = values[:, channel_index]
-            mean = float(np.mean(series))
-            std = max(float(np.std(series)), 1e-5)
-            series = (series - mean) / std
-            for start in range(0, len(series) - window_length + 1, hop):
-                all_windows.append(series[start : start + window_length, None].copy())
-                rows.append({
-                    **metadata,
-                    "channel": channel_name,
-                    "window_index": start // hop,
-                    "window_start_s": start / 30.0,
-                    "sampling_rate_hz": 30,
-                    "window_samples": 120,
-                    "window_seconds": 4.0,
-                    "normalization_mean": mean,
-                    "normalization_std": std,
-                    "timestamp_counter_wraps": timestamp_wraps,
-                })
+        means = values.mean(axis=0)
+        stds = np.maximum(values.std(axis=0), np.float32(1e-5))
+        standardized = (values - means) / stds
+        for start in range(0, len(standardized) - window_length + 1, hop):
+            all_windows.append(standardized[start : start + window_length].copy())
+            row = {
+                **metadata,
+                "channel": "all_six",
+                "window_index": start // hop,
+                "window_start_s": start / 30.0,
+                "sampling_rate_hz": 30,
+                "window_samples": 120,
+                "window_seconds": 4.0,
+                "timestamp_counter_wraps": timestamp_wraps,
+            }
+            for channel_name, mean, std in zip(HART_CHANNELS, means, stds):
+                row[f"normalization_mean_{channel_name}"] = float(mean)
+                row[f"normalization_std_{channel_name}"] = float(std)
+            rows.append(row)
     if not all_windows:
         raise RuntimeError("No HART windows were created from NW sacrum files")
     return np.stack(all_windows), rows
@@ -161,7 +161,7 @@ def load_hart(checkpoint: Path, device: torch.device) -> torch.nn.Module:
     from tsfm_public.models.tspulse.modeling_tspulse import TSPulseForReconstruction
 
     return TSPulseForReconstruction.from_pretrained(
-        str(checkpoint), local_files_only=True
+        str(checkpoint), local_files_only=True, num_input_channels=6
     ).to(device).eval()
 
 
@@ -188,8 +188,9 @@ def infer_embeddings(
                 return_dict=True,
                 enable_masking=False,
             )
-            # HART returns [batch, channels, patches, hidden units].
-            pooled = output.last_hidden_state.mean(dim=2).squeeze(1)
+            # HART returns [batch, channels, patches, hidden units]. Pool patches,
+            # then retain all six channel representations in one window vector.
+            pooled = output.last_hidden_state.mean(dim=2).flatten(start_dim=1)
         embeddings.append(pooled.float().cpu().numpy())
     result = np.concatenate(embeddings, axis=0)
     if result.shape[0] != len(windows) or not np.isfinite(result).all():
@@ -198,9 +199,12 @@ def infer_embeddings(
 
 
 def write_output(destination: Path, rows: list[dict[str, object]], embeddings: np.ndarray) -> None:
-    frame = pd.DataFrame(rows)
-    for index in range(embeddings.shape[1]):
-        frame[f"embedding_{index:03d}"] = embeddings[:, index]
+    metadata = pd.DataFrame(rows)
+    vectors = pd.DataFrame(
+        embeddings,
+        columns=[f"embedding_{index:03d}" for index in range(embeddings.shape[1])],
+    )
+    frame = pd.concat([metadata, vectors], axis=1)
     destination.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(destination, index=False)
     print(f"Saved {len(frame):,} windows x {embeddings.shape[1]} dimensions: {destination}")
@@ -282,8 +286,9 @@ def main() -> None:
             "window_samples": 120,
             "hop_samples": 30,
             "input_shape": list(hart_windows.shape),
-            "embedding_dimension": 48,
-            "pooling": "mean over unmasked contextual patch embeddings",
+            "embedding_dimension": 288,
+            "input_mode": "six channels jointly; channel dimension retained in the embedding",
+            "pooling": "mean over unmasked contextual patch embeddings, then flatten six channels",
             "channels": list(HART_CHANNELS),
             "normalization": "per-recording, per-axis z-score",
         },

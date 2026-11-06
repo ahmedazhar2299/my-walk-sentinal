@@ -81,8 +81,9 @@ def make_model(model_name: str, device: torch.device) -> torch.nn.Module:
     from tsfm_public.models.tspulse.modeling_tspulse import TSPulseForReconstruction
 
     checkpoint = ROOT / "models/HART/finetuning_HART/pretrained_checkpoint"
+    model_kwargs = {"num_input_channels": 6} if model_name == "hart" else {}
     return TSPulseForReconstruction.from_pretrained(
-        str(checkpoint), local_files_only=True
+        str(checkpoint), local_files_only=True, **model_kwargs
     ).to(device)
 
 
