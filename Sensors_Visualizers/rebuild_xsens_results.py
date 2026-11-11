@@ -128,7 +128,7 @@ def sacrum_walking_accel_event_summary(df, meta, t):
     distance = max(1, int(round(0.35 * fs_hz)))
     peaks, _ = find_peaks(y, height=threshold, distance=distance)
     if len(peaks) < 9:
-        return np.nan, np.nan, np.nan, np.nan, 0.0
+        return np.nan, np.nan, np.nan, np.nan, np.nan, 0.0
     event_times = t[peaks[:9]]
     start = float(event_times[0])
     end = float(event_times[-1])

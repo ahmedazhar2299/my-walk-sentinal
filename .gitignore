@@ -21,6 +21,7 @@ project_filebrowser.db
 
 /features_dataset.csv
 /feature_datasets_by_subject/
+/feature_dataset_lab/
 /sample_outputs/
 /validation_outputs/
 /Sensors_Visualizers/XSENS_results/
