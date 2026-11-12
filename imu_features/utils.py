@@ -99,6 +99,36 @@ def timestamp_to_seconds(series):
     return dt_ns / 1e9
 
 
+def unwrap_timestamp_resets(timestamp_s, reset_threshold_s=1.0):
+    """Preserve sample order when a device clock makes a large backward reset.
+
+    Some synchronized XSENS exports restart their timestamp counter within an
+    otherwise continuous trial. Small out-of-order jitter is left unchanged;
+    only a backward jump larger than ``reset_threshold_s`` is unwrapped.
+    """
+    values = np.asarray(timestamp_s, dtype=float)
+    if len(values) < 2:
+        return values
+
+    positive_diffs = np.diff(values)
+    positive_diffs = positive_diffs[np.isfinite(positive_diffs) & (positive_diffs > 0)]
+    expected_dt = float(np.median(positive_diffs)) if len(positive_diffs) else 0.0
+
+    unwrapped = values.copy()
+    offset = 0.0
+    previous = np.nan
+    for index, raw_value in enumerate(values):
+        if not np.isfinite(raw_value):
+            continue
+        corrected = raw_value + offset
+        if np.isfinite(previous) and corrected < previous - reset_threshold_s:
+            offset += previous + expected_dt - corrected
+            corrected = raw_value + offset
+        unwrapped[index] = corrected
+        previous = corrected
+    return unwrapped
+
+
 def estimate_sampling_interval_s(time_s):
     diffs = np.diff(time_s)
     diffs = diffs[np.isfinite(diffs) & (diffs > 0)]
@@ -1003,6 +1033,7 @@ def preprocess_activity_dataframe(df_raw, config):
     df = standardize_sensor_columns(df_raw, config.column_candidates)
     df["timestamp_s"] = timestamp_to_seconds(df["timestamp"])
     df = df.dropna(subset=["timestamp_s"]).copy()
+    df["timestamp_s"] = unwrap_timestamp_resets(df["timestamp_s"].to_numpy(dtype=float))
     df = df.sort_values("timestamp_s", kind="mergesort")
     if df.empty:
         meta = SignalMeta(dt_s=np.nan, fs_hz=np.nan, duration_s=np.nan, n_samples=0)
