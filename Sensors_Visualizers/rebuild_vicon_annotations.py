@@ -57,7 +57,7 @@ def find_target_trials(vicon_root):
     return pd.DataFrame(rows)
 
 
-def build_annotations(vicon_root=DEFAULT_VICON_ROOT):
+def build_annotations(vicon_root=DEFAULT_VICON_ROOT, walking_window="ten_step"):
     trials = find_target_trials(vicon_root)
     if trials.empty:
         return pd.DataFrame()
@@ -76,7 +76,7 @@ def build_annotations(vicon_root=DEFAULT_VICON_ROOT):
             "trial_name": trial["trial_name"],
         }
         try:
-            summary = summarize_vicon_trial(trial["csv_path"])
+            summary = summarize_vicon_trial(trial["csv_path"], walking_window=walking_window)
             row.update(summary)
         except Exception as exc:
             print(
@@ -129,9 +129,10 @@ def main():
     parser = argparse.ArgumentParser(description="Rebuild long-format Vicon annotations from raw marker CSV trials.")
     parser.add_argument("--vicon-root", type=Path, default=DEFAULT_VICON_ROOT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--walking-window", choices=("ten_step", "full"), default="ten_step")
     args = parser.parse_args()
 
-    annotations = build_annotations(args.vicon_root)
+    annotations = build_annotations(args.vicon_root, walking_window=args.walking_window)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     annotations.to_csv(args.output, index=False)
 

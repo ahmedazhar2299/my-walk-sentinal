@@ -230,12 +230,12 @@ def add_walking_sacrum_qc(row: dict, disagreement_steps: float = 22.0, bias_corr
     row["sacrum_qc_source"] = source
 
 
-def walking_summary(df, meta, sensor: str, fixed_duration_s: float = 60.0):
+def walking_summary(df, meta, sensor: str, fixed_duration_s: float | None = 60.0):
     time_s = df["time_s"].to_numpy(dtype=float)
     if len(time_s) < 3:
         return None
-    end_s = min(float(time_s[-1]), fixed_duration_s)
     start_s = float(time_s[0])
+    end_s = float(time_s[-1]) if fixed_duration_s is None else min(float(time_s[-1]), fixed_duration_s)
     mask = (time_s >= start_s) & (time_s <= end_s)
     t = time_s[mask]
     signal = walking_signal(df, sensor)[mask]
@@ -255,7 +255,7 @@ def walking_summary(df, meta, sensor: str, fixed_duration_s: float = 60.0):
         threshold = float(np.nanmean(smooth))
     min_distance = max(1, int(round(params["distance_s"] * meta.fs_hz)))
     peaks, _ = find_peaks(smooth, height=threshold, distance=min_distance)
-    duration = float(fixed_duration_s)
+    duration = float(end_s - start_s)
     steps = float(len(peaks))
     cadence = float(steps / duration * 60.0) if duration > 0 else np.nan
     mean_step_time = float(duration / steps) if steps > 0 and duration > 0 else np.nan
@@ -284,7 +284,7 @@ def walking_summary(df, meta, sensor: str, fixed_duration_s: float = 60.0):
             ten_mean_step_time = np.nan
     return {
         "start": float(t[0]),
-        "end": float(t[0] + fixed_duration_s),
+        "end": float(end_s),
         "duration": duration,
         "step_count": steps,
         "cadence": cadence,

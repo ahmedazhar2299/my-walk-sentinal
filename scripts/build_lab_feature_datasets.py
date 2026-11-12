@@ -85,8 +85,8 @@ def add_task_values(row: dict, activity: str, trial_name: str, values: dict, sen
         row[f"{prefix}{activity}_{metric}"] = value_map[metric]
 
 
-def wide_vicon_features(vicon_root: Path) -> pd.DataFrame:
-    annotations = build_annotations(vicon_root)
+def wide_vicon_features(vicon_root: Path, walking_window: str) -> pd.DataFrame:
+    annotations = build_annotations(vicon_root, walking_window=walking_window)
     if annotations.empty:
         return pd.DataFrame()
 
@@ -100,7 +100,7 @@ def wide_vicon_features(vicon_root: Path) -> pd.DataFrame:
     return pd.DataFrame(rows.values())
 
 
-def wide_xsens_features(xsens_root: Path) -> pd.DataFrame:
+def wide_xsens_features(xsens_root: Path, walking_window: str) -> pd.DataFrame:
     config = load_config()
     config.filtering.enabled = True
     rows: dict[tuple[str, str, int], dict] = {}
@@ -115,7 +115,13 @@ def wide_xsens_features(xsens_root: Path) -> pd.DataFrame:
                     row = rows.setdefault(key, empty_row(*key, include_sensors=True))
                     for sensor in SENSORS:
                         try:
-                            summary, _ = summarize_sensor(trial_dir, sensor, activity, config)
+                            summary, _ = summarize_sensor(
+                                trial_dir,
+                                sensor,
+                                activity,
+                                config,
+                                full_signal_walk=walking_window == "full",
+                            )
                         except Exception as exc:
                             print(f"[WARN] {subject_dir.name} {visit_dir.name} {trial_dir.name} {sensor}: {exc}")
                             summary = None
@@ -123,7 +129,7 @@ def wide_xsens_features(xsens_root: Path) -> pd.DataFrame:
                             row,
                             activity,
                             trial_dir.name,
-                            normalize_summary(summary, activity),
+                            normalize_summary(summary, activity, walking_window=walking_window),
                             sensor=sensor,
                         )
     return pd.DataFrame(rows.values())
@@ -158,16 +164,26 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build visit-level Vicon and XSENS laboratory feature CSV files.")
     parser.add_argument("--vicon-root", type=Path, default=PROJECT_ROOT / "Data/lab/Vicon_CSV_Files")
     parser.add_argument("--xsens-root", type=Path, default=PROJECT_ROOT / "Data/lab/XSENS_synchronized")
-    parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "feature_dataset_lab")
+    parser.add_argument(
+        "--walking-window",
+        choices=("ten_step", "full"),
+        default="ten_step",
+        help="Use a selected 10-step walking window or the full walking recording.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=PROJECT_ROOT / "feature_dataset_lab/ten_step_window",
+    )
     args = parser.parse_args()
 
     write_features(
-        wide_vicon_features(args.vicon_root),
+        wide_vicon_features(args.vicon_root, walking_window=args.walking_window),
         args.output_dir / "Vicon/vicon_features.csv",
         include_sensors=False,
     )
     write_features(
-        wide_xsens_features(args.xsens_root),
+        wide_xsens_features(args.xsens_root, walking_window=args.walking_window),
         args.output_dir / "XSENS/xsens_features.csv",
         include_sensors=True,
     )

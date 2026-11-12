@@ -213,20 +213,35 @@ def ten_step_window_from_foot_markers(df, fs_hz, target_steps=10):
     return start, end, duration, cadence, mean_step
 
 
-def summarize_nw(csv_path):
+def summarize_nw(csv_path, walking_window="ten_step"):
     df, meta = load_vicon_marker_trajectories(csv_path)
     fs = meta["fs_hz"]
     time_s = df["time_s"].to_numpy(dtype=float)
     ten_start, ten_end, ten_duration, ten_cadence, ten_mean_step = ten_step_window_from_foot_markers(df, fs)
     ten_count = 10.0 if np.isfinite(ten_duration) else np.nan
+
+    if walking_window == "full":
+        start = float(time_s[0])
+        end = float(time_s[-1])
+        duration = float(end - start)
+        step_count, _ = count_foot_steps(df, fs, 0, len(df) - 1, min_interval_s=0.35)
+        cadence = float(step_count / duration * 60.0) if duration > 0 else np.nan
+        mean_step = float(duration / step_count) if step_count > 0 else np.nan
+    elif walking_window == "ten_step":
+        start, end = ten_start, ten_end
+        duration, step_count = ten_duration, ten_count
+        cadence, mean_step = ten_cadence, ten_mean_step
+    else:
+        raise ValueError(f"Unsupported walking window: {walking_window}")
+
     return {
         "activity": "walk",
-        "start_time_s": round(ten_start, 3) if np.isfinite(ten_start) else np.nan,
-        "end_time_s": round(ten_end, 3) if np.isfinite(ten_end) else np.nan,
-        "duration_s": round(ten_duration, 3) if np.isfinite(ten_duration) else np.nan,
-        "step_count": ten_count,
-        "cadence_steps_min": round(ten_cadence, 3) if np.isfinite(ten_cadence) else np.nan,
-        "mean_step_time_s": round(ten_mean_step, 3) if np.isfinite(ten_mean_step) else np.nan,
+        "start_time_s": round(start, 3) if np.isfinite(start) else np.nan,
+        "end_time_s": round(end, 3) if np.isfinite(end) else np.nan,
+        "duration_s": round(duration, 3) if np.isfinite(duration) else np.nan,
+        "step_count": float(step_count) if np.isfinite(step_count) else np.nan,
+        "cadence_steps_min": round(cadence, 3) if np.isfinite(cadence) else np.nan,
+        "mean_step_time_s": round(mean_step, 3) if np.isfinite(mean_step) else np.nan,
         "ten_step_start_time_s": round(ten_start, 3) if np.isfinite(ten_start) else np.nan,
         "ten_step_end_time_s": round(ten_end, 3) if np.isfinite(ten_end) else np.nan,
         "ten_step_duration_s": round(ten_duration, 3) if np.isfinite(ten_duration) else np.nan,
@@ -320,11 +335,11 @@ def trial_sort_key(path):
     return (activity_from_trial_name(name) or "", number, name.lower())
 
 
-def summarize_vicon_trial(csv_path):
+def summarize_vicon_trial(csv_path, walking_window="ten_step"):
     name = Path(csv_path).parent.name
     activity = activity_from_trial_name(name)
     if activity == "walk":
-        return summarize_nw(csv_path)
+        return summarize_nw(csv_path, walking_window=walking_window)
     if activity == "left_turn":
         return summarize_turn(csv_path, "left_turn")
     if activity == "right_turn":

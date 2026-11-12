@@ -92,20 +92,35 @@ def find_activity_dirs(visit_dir: Path, prefixes: tuple[str, ...]) -> list[Path]
     return sorted(dirs, key=lambda p: (natural_trial_number(p), p.name.lower()))
 
 
-def normalize_summary(summary: dict | None, activity: str) -> dict:
+def normalize_summary(summary: dict | None, activity: str, walking_window: str = "ten_step") -> dict:
     out = {feature: np.nan for feature in GENERIC_FEATURES}
     if not summary:
         return out
 
     if activity == "walk":
-        out.update(
-            {
+        if walking_window == "full":
+            primary = {
+                "start_time_s": summary.get("start", np.nan),
+                "end_time_s": summary.get("end", np.nan),
+                "duration_s": summary.get("duration", np.nan),
+                "step_count": summary.get("step_count", np.nan),
+                "cadence_steps_min": summary.get("cadence", np.nan),
+                "mean_step_time_s": summary.get("mean_step_time", np.nan),
+            }
+        elif walking_window == "ten_step":
+            primary = {
                 "start_time_s": summary.get("ten_step_start", np.nan),
                 "end_time_s": summary.get("ten_step_end", np.nan),
                 "duration_s": summary.get("ten_step_duration", np.nan),
                 "step_count": summary.get("ten_step_count", np.nan),
                 "cadence_steps_min": summary.get("ten_step_cadence", np.nan),
                 "mean_step_time_s": summary.get("ten_step_mean_step_time", np.nan),
+            }
+        else:
+            raise ValueError(f"Unsupported walking window: {walking_window}")
+        out.update(primary)
+        out.update(
+            {
                 "ten_step_start_time_s": summary.get("ten_step_start", np.nan),
                 "ten_step_end_time_s": summary.get("ten_step_end", np.nan),
                 "ten_step_duration_s": summary.get("ten_step_duration", np.nan),
@@ -141,13 +156,14 @@ def normalize_summary(summary: dict | None, activity: str) -> dict:
     return out
 
 
-def summarize_sensor(activity_dir: Path, sensor: str, activity: str, config):
+def summarize_sensor(activity_dir: Path, sensor: str, activity: str, config, full_signal_walk: bool = False):
     loaded = load_sensor(activity_dir, sensor, config)
     if loaded is None:
         return None, ""
     df, meta = loaded
     if activity == "walk":
-        return walking_summary(df, meta, sensor), ""
+        duration = None if full_signal_walk else 60.0
+        return walking_summary(df, meta, sensor, fixed_duration_s=duration), ""
     if activity == "left_turn":
         return turn_summary(df, meta, config, "left_turn"), ""
     if activity == "right_turn":
